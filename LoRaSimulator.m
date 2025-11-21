@@ -1,7 +1,7 @@
 classdef LoRaSimulator < handle
     properties
         modem   % объект LoRaModem
-        channel % объект SimpleChannel (или наследник)
+        channel % объект SimpleChannel
     end
     
     methods
@@ -28,7 +28,7 @@ classdef LoRaSimulator < handle
                 % Демодуляция
                 [bits_rx, ok] = obj.modem.demodulate(rxSig);
                 
-                % Считаем ошибки
+                % Подсчет ошибок
                 L = min(numel(bits_tx), numel(bits_rx));
                 nBitErr   = nBitErr + sum(bits_tx(1:L) ~= bits_rx(1:L));
                 totalBits = totalBits + L;

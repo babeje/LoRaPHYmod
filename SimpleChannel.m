@@ -22,14 +22,14 @@ classdef SimpleChannel < handle
             t = (0:length(x)-1).' / obj.fs;
             x_cfo = x .* exp(1j*2*pi*obj.cfo_Hz*t);
             
-            % 2) AWGN
+            % 2) АБГШ
             y = obj.addAwgn(x_cfo, obj.snr_dB);
         end
     end
     
     methods (Access = private)
         function y = addAwgn(~, x, snr_dB)
-            % Реализация AWGN без Communications Toolbox
+            % Реализация АБГШ
             snr_lin = 10^(snr_dB/10);
             P_sig   = mean(abs(x).^2);
             P_noise = P_sig / snr_lin;

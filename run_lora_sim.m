@@ -7,7 +7,7 @@ bw      = 125e3;
 fs      = 1e6;
 
 % Параметры канала
-snr_dB  = -10;   % SNR в дБ
+snr_dB  = -5;   % SNR в дБ
 cfo_Hz  = 100;   % CFO, Гц
 
 % Длина полезной нагрузки (в битах)
@@ -16,7 +16,7 @@ payloadLenBits = 128;
 % Кол-во пакетов
 Npkts = 200;
 
-% Создаём модем и канал
+% Модем и канал
 modem   = LoRaModem(rf_freq, sf, bw, fs, ...
                     'CR', 4, ...
                     'HasHeader', true, ...

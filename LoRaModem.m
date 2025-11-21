@@ -1,7 +1,7 @@
 classdef LoRaModem < handle
     properties
         phy            % объект LoRaPHY
-        payloadLenBits % длина полезной нагрузки в битах (для проверки)
+        payloadLenBits % длина полезной нагрузки в битах 
     end
     
     methods
@@ -35,7 +35,7 @@ classdef LoRaModem < handle
             
             obj.payloadLenBits = numel(bitsIn);
             
-            % Дополняем до целого числа байт нулями
+            % Округляем до целого числа байт
             nBits = numel(bitsIn);
             nPad  = mod(8 - mod(nBits,8), 8);
             if nPad == 8
@@ -44,7 +44,7 @@ classdef LoRaModem < handle
             bitsPadded = [bitsIn; zeros(nPad,1,'like',bitsIn)];
             nBitsUsed  = numel(bitsPadded);
             
-            % Биты -> байты
+            % Биты в байты
             payloadBytes = obj.bits2bytes(bitsPadded);
             
             % LoRaPHY TX
@@ -68,10 +68,10 @@ classdef LoRaModem < handle
                 bitsOut = bitsFull(1:L);
             end
     
-            % chkOK может быть не скаляром -> "сжимаем" до одного булева
+            % chkOK может быть не скаляром поэтому сжатие до одного bool
             okChecksum = all(chkOK(:) == 1);
     
-            % Условие "пакет принят"
+            % Условие пакет принят
             okLength = (numel(bitsOut) == obj.payloadLenBits);
             ok       = okChecksum && okLength;
         end
@@ -101,7 +101,7 @@ classdef LoRaModem < handle
         end
     
         function bits = bytes2bits(bytes)
-            % bytes: вектор uint8 → столбец бит (LSB first)
+            % bytes: вектор uint8 в столбец бит (LSB first)
             bytes  = uint8(bytes(:));     % в столбец
             nBytes = numel(bytes);
     
@@ -109,7 +109,7 @@ classdef LoRaModem < handle
     
             for k = 1:nBytes
                 val = bytes(k);
-                % биты 0..7 → позиции 1..8 (LSB first)
+                % биты 0..7 в позиции 1..8 (LSB first)
                 for b = 0:7
                     bits((k-1)*8 + b + 1) = bitget(val, b+1);
                 end
