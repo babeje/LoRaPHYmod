@@ -7,8 +7,8 @@ bw      = 125e3;
 fs      = 1e6;
 
 % Параметры канала
-snr_dB  = -5;   % SNR в дБ
-cfo_Hz  = 100;   % CFO, Гц
+snr_dB  = -15;   % SNR в дБ
+cfo_Hz  = 1000;   % CFO, Гц
 
 % Длина полезной нагрузки (в битах)
 payloadLenBits = 128;

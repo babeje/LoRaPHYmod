@@ -1,7 +1,13 @@
 classdef LoRaModem < handle
     properties
-        phy            % объект LoRaPHY
-        payloadLenBits % длина полезной нагрузки в битах 
+        phy
+        payloadLenBits
+    
+        % Эталонные настройки PHY
+        cr_init
+        has_header_init
+        crc_init
+        preamble_len_init
     end
     
     methods
@@ -15,27 +21,37 @@ classdef LoRaModem < handle
             addParameter(p, 'FastMode', false);
             parse(p, varargin{:});
             
-            % Инициализация LoRaPHY
+            % Сохраняем эталонные настройки
+            obj.cr_init           = p.Results.CR;
+            obj.has_header_init   = p.Results.HasHeader;
+            obj.crc_init          = p.Results.UseCRC;
+            obj.preamble_len_init = p.Results.PreambleLen;
+        
+            % Инициализируем LoRaPHY
             obj.phy = LoRaPHY(rf_freq, sf, bw, fs);
-            obj.phy.cr           = p.Results.CR;
-            obj.phy.has_header   = p.Results.HasHeader;
-            obj.phy.crc          = p.Results.UseCRC;
-            obj.phy.preamble_len = p.Results.PreambleLen;
+            obj.phy.cr           = obj.cr_init;
+            obj.phy.has_header   = obj.has_header_init;
+            obj.phy.crc          = obj.crc_init;
+            obj.phy.preamble_len = obj.preamble_len_init;
             obj.phy.fast_mode    = p.Results.FastMode;
             obj.phy.is_debug     = false;
-            
-            obj.payloadLenBits = [];   % можно задать позже
+        
+            obj.payloadLenBits = [];
         end
         
         function [txSig, payloadBytes, nBitsUsed] = modulate(obj, bitsIn)
-            % bitsIn: столбец 0/1
             if size(bitsIn,2) > 1
-                bitsIn = bitsIn(:); % в столбец
+                bitsIn = bitsIn(:);
             end
-            
+        
             obj.payloadLenBits = numel(bitsIn);
-            
-            % Округляем до целого числа байт
+        
+            % перед каждым TX возвращаем PHY к эталонным настройкам 
+            obj.phy.cr           = obj.cr_init;
+            obj.phy.has_header   = obj.has_header_init;
+            obj.phy.crc          = obj.crc_init;
+            obj.phy.preamble_len = obj.preamble_len_init;
+        
             nBits = numel(bitsIn);
             nPad  = mod(8 - mod(nBits,8), 8);
             if nPad == 8
@@ -43,19 +59,16 @@ classdef LoRaModem < handle
             end
             bitsPadded = [bitsIn; zeros(nPad,1,'like',bitsIn)];
             nBitsUsed  = numel(bitsPadded);
-            
-            % Биты в байты
+        
             payloadBytes = obj.bits2bytes(bitsPadded);
-            
-            % LoRaPHY TX
-            symbols = obj.phy.encode(payloadBytes);
-            txSig   = obj.phy.modulate(symbols);
+            symbols      = obj.phy.encode(payloadBytes);
+            txSig        = obj.phy.modulate(symbols);
         end
         
         function [bitsOut, ok] = demodulate(obj, rxSig)
             % LoRaPHY RX
             [sym_rx, ~, ~]   = obj.phy.demodulate(rxSig);
-            [data_rx, chkOK] = obj.phy.decode(sym_rx);  % data_rx - полезная нагрузка
+            [data_rx, chkVal] = obj.phy.decode(sym_rx);  % data_rx - полезная нагрузка
             
             % Байты -> биты
             bitsFull = obj.bytes2bits(data_rx);
@@ -67,13 +80,9 @@ classdef LoRaModem < handle
                 L = min(obj.payloadLenBits, numel(bitsFull));
                 bitsOut = bitsFull(1:L);
             end
-    
-            % chkOK может быть не скаляром поэтому сжатие до одного bool
-            okChecksum = all(chkOK(:) == 1);
-    
-            % Условие пакет принят
-            okLength = (numel(bitsOut) == obj.payloadLenBits);
-            ok       = okChecksum && okLength;
+
+            % проверка по длине
+            ok = (numel(bitsOut) == obj.payloadLenBits);
         end
     end
     
