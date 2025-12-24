@@ -6,7 +6,7 @@ addpath(genpath(projectRoot));
 
 % параметры PHY
 rf_freq = 868e6;
-sf      = 8;
+sf      = 10;
 bw      = 125e3;
 fs      = 1e6;
 
@@ -18,11 +18,11 @@ PreambleLen = 8;
 FastMode    = true;   % можно true для ускорения
 
 % Симуляция
-Npkts          = 200;     % для кривых лучше 500-2000, но начни с 200
+Npkts          = 200;
 payloadLenBits = 256;
 
 % Настройки разброса по ОСШ
-snr_list = -8:2:10;
+snr_list = -10:2:2;
 
 % Настройки доплера
 cases(1).name = "v=0";
@@ -33,9 +33,9 @@ cases(1).fd_rate = 0;
 cases(2).name = "v=30, fd_rate=5000";
 cases(2).v_mps = 30;
 cases(2).theta = 0;
-cases(2).fd_rate = 5000;
+cases(2).fd_rate = 2500;
 
-% можно добавить третий случай:
+% Можно добавить еще сценариев
 % cases(3).name = "v=30, fd_rate=20000";
 % cases(3).v_mps = 30; cases(3).theta = 0; cases(3).fd_rate = 20000;
 
