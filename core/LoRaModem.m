@@ -66,23 +66,47 @@ classdef LoRaModem < handle
         end
         
         function [bitsOut, ok] = demodulate(obj, rxSig)
-            % LoRaPHY RX
-            [sym_rx, ~, ~]   = obj.phy.demodulate(rxSig);
-            [data_rx, chkVal] = obj.phy.decode(sym_rx);  % data_rx - полезная нагрузка
-            
-            % Байты -> биты
-            bitsFull = obj.bytes2bits(data_rx);
-            
-            % Обрезаем до исходной длины
-            if isempty(obj.payloadLenBits)
-                bitsOut = bitsFull;
-            else
-                L = min(obj.payloadLenBits, numel(bitsFull));
-                bitsOut = bitsFull(1:L);
+            if size(rxSig,2) > 1
+                rxSig = rxSig(:);
             end
-
-            % проверка по длине
-            ok = (numel(bitsOut) == obj.payloadLenBits);
+        
+            bitsOut = false(0,1);
+            ok = false;
+        
+            try
+                [sym_rx, ~, ~] = obj.phy.demodulate(rxSig);
+        
+                % Если демодуляция вернула пусто — считаем пакет потерянным
+                if isempty(sym_rx)
+                    return;
+                end
+        
+                [data_rx, ~] = obj.phy.decode(sym_rx);
+        
+                % Если decode вернул пустые данные — тоже потеря
+                if isempty(data_rx)
+                    return;
+                end
+        
+                % bytes -> bits
+                bitsFull = obj.bytes2bits(uint8(data_rx));
+        
+                % Обрезаем до исходной длины
+                if ~isempty(obj.payloadLenBits)
+                    L = min(obj.payloadLenBits, numel(bitsFull));
+                    bitsOut = bitsFull(1:L);
+                    ok = (numel(bitsOut) == obj.payloadLenBits);
+                else
+                    bitsOut = bitsFull;
+                    ok = true;
+                end
+        
+            catch
+                % Любая ошибка decode/demodulate = пакет не принят
+                bitsOut = false(0,1);
+                ok = false;
+                return;
+            end
         end
     end
     
