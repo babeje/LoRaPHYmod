@@ -27,14 +27,13 @@ classdef SimpleChannel < handle
         end
     end
     
-    methods (Access = private)
+    methods (Access = protected)
         function y = addAwgn(~, x, snr_dB)
-            % Реализация АБГШ
+            % Реализация AWGN без Communications Toolbox
             snr_lin = 10^(snr_dB/10);
             P_sig   = mean(abs(x).^2);
             P_noise = P_sig / snr_lin;
-            noise   = sqrt(P_noise/2) * ...
-                      (randn(size(x)) + 1j*randn(size(x)));
+            noise   = sqrt(P_noise/2) * (randn(size(x)) + 1j*randn(size(x)));
             y = x + noise;
         end
     end
