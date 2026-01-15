@@ -8,6 +8,7 @@ classdef LoRaModem < handle
         has_header_init
         crc_init
         preamble_len_init
+        rx_ignore_crc
     end
     
     methods
@@ -19,6 +20,7 @@ classdef LoRaModem < handle
             addParameter(p, 'UseCRC', true);
             addParameter(p, 'PreambleLen', 8);
             addParameter(p, 'FastMode', false);
+            addParameter(p, 'RxIgnoreCRC', false);
             parse(p, varargin{:});
             
             % Сохраняем эталонные настройки
@@ -26,6 +28,7 @@ classdef LoRaModem < handle
             obj.has_header_init   = p.Results.HasHeader;
             obj.crc_init          = p.Results.UseCRC;
             obj.preamble_len_init = p.Results.PreambleLen;
+            obj.rx_ignore_crc = logical(p.Results.RxIgnoreCRC);
         
             % Инициализируем LoRaPHY
             obj.phy = LoRaPHY(rf_freq, sf, bw, fs);
@@ -80,26 +83,54 @@ classdef LoRaModem < handle
                 if isempty(sym_rx)
                     return;
                 end
-        
-                [data_rx, ~] = obj.phy.decode(sym_rx);
-        
+
+                crc_saved = obj.phy.crc;
+                if obj.rx_ignore_crc
+                    obj.phy.crc = false;
+                end
+
+                try
+                    [data_rx, ~] = obj.phy.decode(sym_rx);
+                catch ME
+                    obj.phy.crc = crc_saved;
+                    rethrow(ME);
+                end
+                
+                obj.phy.crc = crc_saved;
+
                 % Если decode вернул пустые данные — тоже потеря
                 if isempty(data_rx)
                     return;
                 end
         
                 % bytes -> bits
-                bitsFull = obj.bytes2bits(uint8(data_rx));
+                % bitsFull = obj.bytes2bits(uint8(data_rx));
         
                 % Обрезаем до исходной длины
+
+                bitsOut = obj.bytes2bits(uint8(data_rx));
+
+                % Обрезаем до исходной длины payload
                 if ~isempty(obj.payloadLenBits)
-                    L = min(obj.payloadLenBits, numel(bitsFull));
-                    bitsOut = bitsFull(1:L);
-                    ok = (numel(bitsOut) == obj.payloadLenBits);
+                    if numel(bitsOut) >= obj.payloadLenBits
+                        bitsOut = bitsOut(1:obj.payloadLenBits);
+                        ok = true;
+                    else
+                        bitsOut = false(0,1);
+                        ok = false;
+                    end
                 else
-                    bitsOut = bitsFull;
-                    ok = true;
+                    ok = ~isempty(bitsOut);
                 end
+
+                % if ~isempty(obj.payloadLenBits)
+                %     L = min(obj.payloadLenBits, numel(bitsFull));
+                %     bitsOut = bitsFull(1:L);
+                %     ok = (numel(bitsOut) == obj.payloadLenBits);
+                % else
+                %     bitsOut = bitsFull;
+                %     ok = true;
+                % end
         
             catch
                 % Любая ошибка decode/demodulate = пакет не принят
