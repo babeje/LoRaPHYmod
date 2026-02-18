@@ -15,14 +15,14 @@ CR          = 4;
 HasHeader   = true;
 UseCRC      = true;
 PreambleLen = 8;
-FastMode    = true;   % можно true для ускорения
+FastMode    = false;   % можно true для ускорения
 
 % Симуляция
-Npkts          = 1000;
+Npkts          = 10;
 payloadLenBits = 1024;
 
 % Настройки разброса по ОСШ
-snr_list = -20:2:0;
+snr_list = -20:1:-15;
 
 % Настройки доплера
 cases(1).name = "v=0";
@@ -30,22 +30,22 @@ cases(1).v_mps = 0;
 cases(1).theta = 0;
 cases(1).fd_rate = 0;
 
-cases(2).name = "v=30, fd_rate=0";
-cases(2).v_mps = 30;
-cases(2).theta = 0;
-cases(2).fd_rate = 0;
-
-cases(3).name = "v=30, fd_rate=2000";
-cases(3).v_mps = 30;
-cases(3).theta = 0;
-cases(3).fd_rate = 2000;
+% cases(2).name = "v=30, fd_rate=0";
+% cases(2).v_mps = 30;
+% cases(2).theta = 0;
+% cases(2).fd_rate = 0;
+% % 
+% cases(3).name = "v=30, fd_rate=2000";
+% cases(3).v_mps = 30;
+% cases(3).theta = 0;
+% cases(3).fd_rate = 2000;
 
 % Результаты
 PER = zeros(numel(cases), numel(snr_list));
 BER = zeros(numel(cases), numel(snr_list));
 
 for ci = 1:numel(cases)
-    fprintf("\\n=== Case: %s ===\\n", cases(ci).name);
+    fprintf("Case: %s", cases(ci).name);
 
     for si = 1:numel(snr_list)
         snr_dB = snr_list(si);
@@ -78,6 +78,24 @@ xlabel('SNR (dB)');
 ylabel('PER');
 legend(string({cases.name}), 'Location', 'best');
 title(sprintf('PER, SF=%d, BW=%.0f kHz, Количество пакетов=%d, Длина полезной нагрузки=%d bits', sf, bw/1e3, Npkts, payloadLenBits));
+
+outDir = fullfile(projectRoot, 'results', 'data');
+if ~exist(outDir), mkdir(outDir); end
+
+ts = datestr(now, 'yyyymmdd_HHMMSS');
+save(fullfile(outDir, "snr_sweep_" + ts + ".mat"), 'snr_list', 'cases', 'BER', 'PER', ...
+     'rf_freq','sf','bw','fs','Npkts','payloadLenBits','CR','HasHeader','UseCRC','PreambleLen','FastMode');
+
+figure;
+plot(snr_list, BER(1,:), '-o'); hold on;
+for ci = 2:numel(cases)
+    plot(snr_list, BER(ci,:), '-o');
+end
+grid on;
+xlabel('SNR (dB)');
+ylabel('BER');
+legend(string({cases.name}), 'Location', 'best');
+title(sprintf('BER, SF=%d, BW=%.0f kHz, Количество пакетов=%d, Длина полезной нагрузки=%d bits', sf, bw/1e3, Npkts, payloadLenBits));
 
 outDir = fullfile(projectRoot, 'results', 'data');
 if ~exist(outDir), mkdir(outDir); end
