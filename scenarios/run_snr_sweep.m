@@ -22,7 +22,7 @@ Npkts          = 10;
 payloadLenBits = 1024;
 
 % Настройки разброса по ОСШ
-snr_list = -10:1:10;
+snr_list = -20:1:0;
 
 % Настройки доплера
 cases(1).name = "v=0";
@@ -54,14 +54,20 @@ for ci = 1:numel(cases)
         modem = LoRaModem(rf_freq, sf, bw, fs, ...
             'CR', CR, 'HasHeader', HasHeader, 'UseCRC', UseCRC, ...
             'PreambleLen', PreambleLen, 'FastMode', FastMode);
+        
+        channel = RayleighTDLChannel(fs, snr_dB, cfo_Hz, ...
+        'PathDelays', [0, 1.0e-6, 4.0e-6], ...
+        'PathGains',  [0, -3, -6], ...
+        'Seed', 42);
 
+        channel.printInfo();   % проверяем tau_rms перед запуском
         % channel = DopplerChannel(fs, snr_dB, cfo_Hz, rf_freq, ...
         %     cases(ci).v_mps, cases(ci).theta, cases(ci).fd_rate);
 
-        channel = MultipathChannel(fs, snr_dB, cfo_Hz, ...
-        'PathDelays', [0, 10e-6, 20e-6], ...   % пример трёх лучей
-        'PathGains', [0, -3, -6], ...           % убывающие мощности
-        'MaxDopplerShift', 0);                  % доплер для v=30 м/
+        % channel = MultipathChannel(fs, snr_dB, cfo_Hz, ...
+        % 'PathDelays', [0, 10e-6, 20e-6], ...   % пример трёх лучей
+        % 'PathGains', [0, -3, -6], ...           % убывающие мощности
+        % 'MaxDopplerShift', 0);                  % доплер для v=30 м/
 
         sim = LoRaSimulator(modem, channel);
         [ber, per] = sim.run(Npkts, payloadLenBits);
