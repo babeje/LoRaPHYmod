@@ -6,7 +6,7 @@ addpath(genpath(projectRoot));
 
 % Параметры PHY
 rf_freq = 868e6;
-sf      = 9;
+sf      = 7;
 bw      = 125e3;
 fs      = 1e6;
 
@@ -28,11 +28,16 @@ modem   = LoRaModem(rf_freq, sf, bw, fs, ...
                     'PreambleLen', 8, ...
                     'FastMode', false);
 
-v_mps     = 30;     % скорость, м/с
+v_mps     = 0;     % скорость, м/с
 theta_rad = 0;      % 0 = летим на приёмник (макс допплер)
-fd_rate   = 5000;      % пока без изменения допплера во времени
+fd_rate   = 0;      % пока без изменения допплера во времени
 
-channel = DopplerChannel(fs, snr_dB, cfo_Hz, rf_freq, v_mps, theta_rad, fd_rate);
+% channel = DopplerChannel(fs, snr_dB, cfo_Hz, rf_freq, v_mps, theta_rad, fd_rate);
+
+channel = MultipathChannel(fs, snr_dB, cfo_Hz, ...
+    'PathDelays', [0, 10e-6, 20e-6], ...   % пример трёх лучей
+    'PathGains', [0, -3, -6], ...           % убывающие мощности
+    'MaxDopplerShift', 0);                  % доплер для v=30 м/
 
 % Имитационная модель
 sim     = LoRaSimulator(modem, channel);
