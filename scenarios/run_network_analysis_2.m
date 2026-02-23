@@ -46,7 +46,7 @@ fprintf('=== Анализ LoRa mesh-сети: PHY-уровень ===\n\n');
 %                       плотности, коллапсирующей маршрут в 1 хоп.
 
 numNodes = 30;
-areaSize = 1200;  % м — подобрано из условия: d_hop_max ≈ 520 м → 3-4 хопа
+areaSize = 800;   % м — при txPower=20 дБм и d_hop~450 м → 3-4 хопа, SNR>5 дБ
 
 rng(42);
 nodePositions = rand(numNodes, 2) * areaSize;
@@ -82,7 +82,7 @@ end
 
 fc_MHz       = 868;
 fc_Hz        = fc_MHz * 1e6;
-txPower_dBm  = 10;
+txPower_dBm  = 20;          % 20 дБм → d_hop ~450 м при SNR>5 дБ (NLOS, n=3.8)
 noiseFigure  = 6;           % дБ, типовой SX1262
 hTx_m        = 1.5;         % высота антенны над точкой монтажа, м
 hRx_m        = 1.5;
@@ -203,7 +203,7 @@ hopThr_bps = nan(nHops, 1);
 for h = 1:nHops
     modem = LoRaModem(fc_Hz, sf, bw, fs, ...
         'CR', CR, 'HasHeader', true, 'UseCRC', true, ...
-        'PreambleLen', 8, 'FastMode', true);
+        'PreambleLen', 8, 'FastMode', false);
 
     channel = RayleighTDLChannel(fs, routeSNR(h), 0, ...
         'PathDelays', tdlDelays, ...
@@ -271,7 +271,10 @@ end
 
 fprintf('\nАналитика E2E vs K...\n');
 
-snr_typical = median(routeSNR);
+% Типовой SNR хопа — берём минимальный SNR маршрута (worst-case hop)
+% Это честнее median: если хоть один хоп слабый — он определяет PER_e2e
+snr_typical  = min(routeSNR);
+snr_typical_median = median(routeSNR);
 ch_h = RayleighTDLChannel(fs, snr_typical, 0, ...
     'PathDelays', tdlDelays, 'PathGains', tdlGains, 'Seed', 42);
 % FastMode=false для достоверной оценки PER_hop на типовом SNR
@@ -331,96 +334,146 @@ colors = [0.00 0.45 0.70;
           0.47 0.67 0.19;
           0.63 0.08 0.18];
 
-% --- График 1: PER vs SNR (только Rayleigh TDL — городской канал) ---
-figure('Name','PER vs SNR — Urban TDL','Color','w','Position',[50 50 680 480]);
-semilogy(snr_sweep, max(PER_tdl, 1e-4), '-^', 'Color', colors(3,:), 'LineWidth', 2.5, 'MarkerSize', 7);
-xline(snrThreshold, '--k', 'LineWidth', 1.3, 'Label', sprintf('SF%d sensitivity threshold', sf), ...
+% --- График 1: PER vs SNR ---
+% Показываем оба канала: AWGN (теоретический минимум) и Rayleigh TDL (городской).
+% Важно: для Rayleigh-канала PER насыщается на уровне ~0.1-0.3 при высоком SNR —
+% это физически корректно и называется "diversity floor" (предел разнесения).
+% Причина: один случайный коэффициент h на пакет (медленные замирания) →
+% часть пакетов попадает в глубокие ямы |h|^2 << 1 независимо от SNR.
+figure('Name','PER vs SNR','Color','w','Position',[50 50 680 480]);
+semilogy(snr_sweep, max(PER_awgn, 1e-4), '-o', 'Color', colors(1,:), 'LineWidth', 2, 'MarkerSize', 6);
+hold on;
+semilogy(snr_sweep, max(PER_tdl,  1e-4), '-^', 'Color', colors(3,:), 'LineWidth', 2.5, 'MarkerSize', 7);
+xline(snrThreshold, '--k', 'LineWidth', 1.3, ...
+    'Label', sprintf('SF%d threshold = %.1f dB', sf, snrThreshold), ...
     'LabelHorizontalAlignment', 'left');
 xlabel('SNR, dB', 'FontSize', 13); ylabel('PER', 'FontSize', 13);
-title(sprintf('PER vs SNR | SF=%d, BW=%d kHz, CR=4/%d | Urban Rayleigh TDL', sf, bw/1e3, CR+4), 'FontSize', 13);
-legend('Rayleigh TDL (urban)', 'Location', 'southwest');
-grid on; ylim([1e-4 1]); xlim([snr_sweep(1) snr_sweep(end)]);
+title(sprintf('PER vs SNR | SF=%d, BW=%d kHz, CR=4/%d', sf, bw/1e3, CR+4), 'FontSize', 13);
+legend('AWGN (ideal)', 'Rayleigh TDL (urban, diversity floor)', 'Location', 'southwest');
+grid on; ylim([1e-4 1]); xlim([snr_sweep(1) snr_sweep(end)]); hold off;
 
-% --- График 2: BER vs SNR (только Rayleigh TDL — городской канал) ---
-figure('Name','BER vs SNR — Urban TDL','Color','w','Position',[70 70 680 480]);
-semilogy(snr_sweep, max(BER_tdl, 1e-5), '-^', 'Color', colors(3,:), 'LineWidth', 2.5, 'MarkerSize', 7);
-xline(snrThreshold, '--k', 'LineWidth', 1.3, 'Label', sprintf('SF%d sensitivity threshold', sf), ...
+% --- График 2: BER vs SNR ---
+figure('Name','BER vs SNR','Color','w','Position',[70 70 680 480]);
+semilogy(snr_sweep, max(BER_awgn, 1e-5), '-o', 'Color', colors(1,:), 'LineWidth', 2, 'MarkerSize', 6);
+hold on;
+semilogy(snr_sweep, max(BER_tdl,  1e-5), '-^', 'Color', colors(3,:), 'LineWidth', 2.5, 'MarkerSize', 7);
+xline(snrThreshold, '--k', 'LineWidth', 1.3, ...
+    'Label', sprintf('SF%d threshold = %.1f dB', sf, snrThreshold), ...
     'LabelHorizontalAlignment', 'left');
 xlabel('SNR, dB', 'FontSize', 13); ylabel('BER', 'FontSize', 13);
-title(sprintf('BER vs SNR | SF=%d, BW=%d kHz, CR=4/%d | Urban Rayleigh TDL', sf, bw/1e3, CR+4), 'FontSize', 13);
-legend('Rayleigh TDL (urban)', 'Location', 'southwest');
-grid on; ylim([1e-5 1]); xlim([snr_sweep(1) snr_sweep(end)]);
+title(sprintf('BER vs SNR | SF=%d, BW=%d kHz, CR=4/%d', sf, bw/1e3, CR+4), 'FontSize', 13);
+legend('AWGN (ideal)', 'Rayleigh TDL (urban, diversity floor)', 'Location', 'southwest');
+grid on; ylim([1e-5 1]); xlim([snr_sweep(1) snr_sweep(end)]); hold off;
 
 % --- График 3а: SNR между узлами маршрута (стиль bar, подписи N→M) ---
-if nHops > 1
-    % Подписи вида "6→1", "1→4" и т.д.
-    tickLbls = arrayfun(@(h) sprintf('%d→%d', route(h), route(h+1)), ...
-        1:nHops, 'UniformOutput', false);
+% Условие nHops > 1 убрано — график строится всегда, даже при одном хопе.
+% YDir reverse убран: при отрицательных SNR инверсия уводила столбцы
+% за пределы видимой области.
+tickLbls = arrayfun(@(h) sprintf('%d\x2192%d', route(h), route(h+1)), ...
+    1:nHops, 'UniformOutput', false);
 
-    figure('Name','SNR between route nodes','Color','w','Position',[90 90 680 460]);
-    b = bar(1:nHops, routeSNR, 0.6);
-    b.FaceColor = [0.22 0.45 0.70];   % синий как на образце
-    b.EdgeColor = 'none';
-    hold on;
-    % Порог чувствительности — тонкая пунктирная линия
-    yline(snrThreshold, '--r', 'LineWidth', 1.2, 'Label', sprintf('SNR threshold (SF%d)', sf), ...
-        'LabelHorizontalAlignment', 'left');
-    set(gca, 'XTick', 1:nHops, 'XTickLabel', tickLbls, ...
-        'XTickLabelRotation', 0, 'FontSize', 11, 'Box', 'on');
-    xlabel('Hops', 'FontSize', 13);
-    ylabel('SNR, dB', 'FontSize', 13);
-    title('SNR between route nodes', 'FontSize', 13, 'FontWeight', 'bold');
-    % Подписи значений над столбцами
-    for h = 1:nHops
-        text(h, routeSNR(h) + 0.3, sprintf('%.1f', routeSNR(h)), ...
-            'HorizontalAlignment', 'center', 'FontSize', 9, 'Color', [0.15 0.15 0.15]);
-    end
-    % Перевёрнутая ось Y: большие значения SNR — внизу, меньшие — вверху.
-    % Визуально: "высокие столбцы падают вниз" — читается как убывание SNR.
-    y_lo = min(0, min(routeSNR) - 2);
-    y_hi = max(routeSNR) * 1.15;
-    if y_hi <= y_lo, y_hi = y_lo + 5; end
-    ylim([y_lo, y_hi]);
-    set(gca, 'YDir', 'reverse');   % инверсия оси Y
-    grid on; grid minor; hold off;
+figure('Name', 'SNR between route nodes', 'Color', 'w', 'Position', [90 90 680 460]);
+b = bar(1:nHops, routeSNR, 0.6);
+b.FaceColor = colors(1,:);   % синий — совпадает с цветовой схемой проекта
+b.EdgeColor = 'none';
+hold on;
 
-    % --- График 3б: PER vs SNR по хопам маршрута ---
-    figure('Name','PER vs Hop SNR','Color','w','Position',[110 110 660 460]);
-    scatter(routeSNR, hopPER, 100, colors(2,:), 'filled', ...
-        'MarkerEdgeColor', 'k', 'LineWidth', 0.8);
-    hold on;
-    for h = 1:nHops
-        text(routeSNR(h) + 0.25, hopPER(h) + 0.015, ...
-            sprintf('%d→%d', route(h), route(h+1)), ...
-            'FontSize', 10, 'Color', [0.2 0.2 0.2]);
+% Линия порога чувствительности
+yline(snrThreshold, '--r', 'LineWidth', 1.4, ...
+    'Label', sprintf('SNR threshold (SF%d) = %.1f dB', sf, snrThreshold), ...
+    'LabelHorizontalAlignment', 'left', 'LabelVerticalAlignment', 'bottom');
+
+% Подписи значений над/под столбцами в зависимости от знака SNR:
+% при положительном SNR — текст над столбцом, при отрицательном — под верхушкой
+for h = 1:nHops
+    if routeSNR(h) >= 0
+        yPos   = routeSNR(h) + 0.4;
+        vAlign = 'bottom';
+    else
+        yPos   = routeSNR(h) - 0.4;
+        vAlign = 'top';
     end
-    xline(snrThreshold, '--r', 'LineWidth', 1.3, ...
-        'Label', sprintf('SNR threshold (SF%d)', sf), ...
-        'LabelHorizontalAlignment', 'left');
-    xlabel('Hop SNR, dB', 'FontSize', 13);
-    ylabel('Hop PER', 'FontSize', 13);
-    title(sprintf('PER vs Hop SNR | Route %d\u2192%d | PER_{e2e} = %.4f', src, dst, PER_e2e), 'FontSize', 13);
-    grid on;
-    yMax = max(hopPER) * 1.4 + 0.05;
-    if isnan(yMax) || yMax < 0.05, yMax = 0.15; end
-    ylim([0, yMax]); hold off;
+    text(h, yPos, sprintf('%.1f dB', routeSNR(h)), ...
+        'HorizontalAlignment', 'center', ...
+        'VerticalAlignment',   vAlign, ...
+        'FontSize', 9, 'Color', [0.15 0.15 0.15]);
 end
 
+set(gca, 'XTick', 1:nHops, 'XTickLabel', tickLbls, ...
+    'XTickLabelRotation', 0, 'FontSize', 11, 'Box', 'on');
+xlabel('Hops', 'FontSize', 13);
+ylabel('SNR, dB', 'FontSize', 13);
+title('SNR between route nodes', 'FontSize', 13, 'FontWeight', 'bold');
+
+% Диапазон оси Y: запас сверху и снизу, порог всегда виден
+y_lo = min(min(routeSNR) - 3, snrThreshold - 2);
+y_hi = max(routeSNR) * 1.15 + 1;
+if y_hi <= y_lo, y_hi = y_lo + 10; end
+ylim([y_lo, y_hi]);
+
+grid on; grid minor; hold off;
+
+% --- График 3б: PER vs SNR по хопам маршрута ---
+figure('Name', 'PER vs Hop SNR', 'Color', 'w', 'Position', [110 110 660 460]);
+scatter(routeSNR, hopPER, 100, colors(2,:), 'filled', ...
+    'MarkerEdgeColor', 'k', 'LineWidth', 0.8);
+hold on;
+for h = 1:nHops
+    text(routeSNR(h) + 0.25, hopPER(h) + 0.015, ...
+        sprintf('%d\x2192%d', route(h), route(h+1)), ...
+        'FontSize', 10, 'Color', [0.2 0.2 0.2]);
+end
+xline(snrThreshold, '--r', 'LineWidth', 1.3, ...
+    'Label', sprintf('SNR threshold (SF%d)', sf), ...
+    'LabelHorizontalAlignment', 'left');
+xlabel('Hop SNR, dB', 'FontSize', 13);
+ylabel('Hop PER', 'FontSize', 13);
+title(sprintf('PER vs Hop SNR | Route %d\x2192%d | PER_{e2e} = %.4f', ...
+    src, dst, PER_e2e), 'FontSize', 13);
+grid on;
+yMax = max(hopPER) * 1.4 + 0.05;
+if isnan(yMax) || yMax < 0.05, yMax = 0.15; end
+ylim([0, yMax]); hold off;
+
 % --- График 4: E2E метрики vs число хопов ---
-figure('Name','E2E Metrics vs Hops','Color','w','Position',[110 110 720 430]);
+% Цвета осей (YAxis.Color) явно совпадают с цветами соответствующих линий:
+%   левая ось  (PER)        — оранжевый colors(2,:)
+%   правая ось (Throughput) — синий     colors(1,:)
+% Это устраняет путаницу, когда MATLAB автоматически красит подпись оси
+% в цвет, не совпадающий с цветом линии на этой оси.
+figure('Name', 'E2E Metrics vs Hops', 'Color', 'w', 'Position', [130 130 720 450]);
+
+ax4 = gca;
+
 yyaxis left;
-plot(hop_range, PER_e2e_hops, '-o', 'Color', colors(2,:), 'LineWidth', 2, 'MarkerSize', 8);
-ylabel('PER_{e2e}', 'FontSize', 13); ylim([0 1]);
+plot(hop_range, PER_e2e_hops, '-o', ...
+    'Color', colors(2,:), 'LineWidth', 2, 'MarkerSize', 8, ...
+    'MarkerFaceColor', colors(2,:));
+ylabel('PER_{e2e}', 'FontSize', 13);
+ylim([0, 1]);
+set(gca, 'YDir', 'normal');
+ax4.YAxis(1).Color = colors(2,:);   % левая ось — оранжевая, как линия PER
+
 yyaxis right;
-plot(hop_range, Thr_e2e_hops, '-s', 'Color', colors(1,:), 'LineWidth', 2, 'MarkerSize', 8);
+plot(hop_range, Thr_e2e_hops, '-s', ...
+    'Color', colors(1,:), 'LineWidth', 2, 'MarkerSize', 8, ...
+    'MarkerFaceColor', colors(1,:));
 ylabel('Throughput_{e2e}, bit/s', 'FontSize', 13);
-xline(nHops, '--k', 'LineWidth', 1.2, 'Label', sprintf('Маршрут (%d хопов)', nHops));
+ylim([0, max(Thr_e2e_hops) * 1.1]);
+set(gca, 'YDir', 'normal');
+ax4.YAxis(2).Color = colors(1,:);   % правая ось — синяя, как линия Throughput
+
+xline(nHops, '--k', 'LineWidth', 1.4, ...
+    'Label', sprintf('Route (%d hops)', nHops), ...
+    'LabelVerticalAlignment', 'bottom');
 xlabel('Number of hops K', 'FontSize', 13);
-title(sprintf('PER_{e2e} and Throughput vs Number of Hops K | SNR_{hop} = %.1f dB', snr_typical), 'FontSize', 13);
-% Обе кривые монотонно деградируют с ростом K — это ожидаемый результат:
-% PER_e2e растёт, Throughput падает. Чем больше хопов, тем ниже надёжность.
-legend('PER_{e2e} (left axis)', 'Throughput_{e2e} (right axis)', 'Location', 'east');
-grid on; xlim([1 hop_range(end)]);
+title(sprintf('PER_{e2e} and Throughput vs Hops K | worst-case SNR_{hop} = %.1f dB', ...
+    snr_typical), 'FontSize', 13);
+legend('PER_{e2e} (left axis)', 'Throughput_{e2e} (right axis)', ...
+    'Location', 'east', 'FontSize', 11);
+grid on;
+xlim([1, hop_range(end)]);
+set(gca, 'XTick', hop_range);
 
 % --- График 5: PER vs SNR при разных скоростях ---
 figure('Name','PER vs SNR — Doppler','Color','w','Position',[130 130 680 480]);
