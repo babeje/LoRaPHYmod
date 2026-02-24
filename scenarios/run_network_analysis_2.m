@@ -82,7 +82,7 @@ end
 
 fc_MHz       = 868;
 fc_Hz        = fc_MHz * 1e6;
-txPower_dBm  = 20;          % 20 дБм → d_hop ~450 м при SNR>5 дБ (NLOS, n=3.8)
+txPower_dBm  = 14;          % 20 дБм → d_hop ~450 м при SNR>5 дБ (NLOS, n=3.8)
 noiseFigure  = 6;           % дБ, типовой SX1262
 hTx_m        = 1.5;         % высота антенны над точкой монтажа, м
 hRx_m        = 1.5;
@@ -106,8 +106,8 @@ T_pkt_ms  = (8 + 4.25 + Nsym_pkt) * T_sym_ms;
 T_pkt_s   = T_pkt_ms / 1e3;
 
 % TDL-профиль: 4 луча, tau_rms ≈ 1.75 мкс (ITU-R P.1411-10, 300 м)
-tdlDelays = [0, 0.5e-6, 2.0e-6, 5.0e-6];
-tdlGains  = [0, -2,     -5,     -8];
+PathDelays = [0,  0.5e-6,  2.0e-6,  4.0e-6];
+PathGains  = [0,  -4,      -10,     -18];
 
 snr_sweep = -12:1:10;     % расширен до +10 дБ — TDL успевает достичь PER≈0
 
@@ -257,9 +257,12 @@ for si = 1:numel(snr_sweep)
         LoRaSimulator(modem, ch_ray).run(Npkts_sweep, payloadBits);
 
     ch_tdl = RayleighTDLChannel(fs, snr_i, 0, ...
-        'PathDelays', tdlDelays, 'PathGains', tdlGains, 'Seed', 42);
-    [BER_tdl(si), PER_tdl(si), ~] = ...
-        LoRaSimulator(modem, ch_tdl).run(Npkts_sweep, payloadBits);
+    'PathDelays', tdlDelays, 'PathGains', tdlGains, ...
+    'Seed', []);   % [] = случайный, усредняем по реализациям
+    % ch_tdl = RayleighTDLChannel(fs, snr_i, 0, ...
+    %     'PathDelays', tdlDelays, 'PathGains', tdlGains, 'Seed', 42);
+    % [BER_tdl(si), PER_tdl(si), ~] = ...
+    %     LoRaSimulator(modem, ch_tdl).run(Npkts_sweep, payloadBits);
 
     fprintf('  SNR=%5.1f дБ | PER: AWGN=%.2f  Ray=%.2f  TDL=%.2f\n', ...
         snr_i, PER_awgn(si), PER_rayleigh(si), PER_tdl(si));

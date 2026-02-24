@@ -27,118 +27,24 @@ fprintf('=== Анализ LoRa mesh-сети: PHY-уровень ===\n\n');
 %% ============================================================
 % Параметры топологии подобраны под многохоповый маршрут:
 %
-%   areaSize = 4000 м — городской район 4×4 км. Диагональ площадки ≈ 5660 м.
-%                       При txPower=14 дБм и NLOS (n_path=3.8) максимальный
-%                       радиус одного хопа составляет ~2–2.5 км.
-%                       Расстояния между узлами >1 км — область корректного
-%                       применения ITU-R P.1411-10 (разработана для d = 0.5–3 км).
-%
-%   numNodes = 50     — плотность ~3.1 узла/км², соответствует реалистичным
-%                       городским развёртываниям LoRa (The Things Network,
-%                       SmartCity пилоты). Увеличение с 30 до 50 узлов
-%                       обеспечивает достаточное число промежуточных ретрансляторов
-%                       для формирования маршрутов из 4–5 хопов.
-%
-%   topoSeed          — автоматически подбирается из диапазона 1..200 как
-%                       seed, дающий максимальное число хопов на маршруте.
-%                       Фиксируется один раз и используется для воспроизводимости.
+%   areaSize = 1200 м — расчётное значение из модели распространения.
+%                       При txPower=10 дБм и NLOS с экспонентой пути n=3.8
+%                       максимальный радиус одного хопа составляет ~520 м.
+%                       Диагональ площадки = 1200*sqrt(2) ≈ 1700 м ≈ 3*d_hop.
+%                       Это обеспечивает 3-4 хопа на маршруте src→dst.
 %
 %   nodeHeights 5..25 м — реалистичный монтаж на зданиях/столбах.
+%
+%   numNodes = 30     — достаточно для связной топологии без избыточной
+%                       плотности, коллапсирующей маршрут в 1 хоп.
 
-numNodes = 50;
-areaSize = 4000;   % м — городской район 4×4 км, d_hop ~ 1.5–2.5 км (ITU-R P.1411 валиден)
+numNodes = 30;
+areaSize = 4000;
 
-% --- Автоматический подбор seed топологии ---
-% Перебираем seeds 1..200, для каждого строим матрицу связности и ищем
-% максимальный маршрут. Фиксируем seed с наибольшим числом хопов.
-% Это однократная процедура: после нахождения seed топология воспроизводима.
-fprintf('Подбор оптимального seed топологии...\n');
-
-fc_MHz_pre      = 868;
-noiseFigure_pre = 6;
-txPower_pre     = 14;
-snrThresh_pre   = -7.5;
-k_B_pre         = 1.38e-23;
-noisePower_pre  = 10*log10(k_B_pre * 290 * 125e3 * 1000) + noiseFigure_pre;
-
-% Верхняя граница числа хопов: алгоритм максимизирует длину маршрута,
-% но не превышает hopMax. Нижняя граница не нужна — из всех допустимых
-% seeds выбирается тот, у которого глобально длиннейший маршрут наибольший,
-% то есть алгоритм естественно стремится к hopMax.
-hopMax = 7;   % максимально допустимое число хопов на маршруте
-
-bestSeed  = -1;
-bestNhops = 0;
-
-fprintf('Подбор seed топологии (целевое число хопов: не более %d)...\n', hopMax);
-
-for seedTry = 1:500
-    rng(seedTry);
-    posT = rand(numNodes, 2) * areaSize;
-    rng(seedTry);
-    hgtT = 5 + rand(numNodes, 1) * 20;
-
-    % Быстрая оценка матрицы связности
-    connT = false(numNodes);
-    for ii = 1:numNodes
-        for jj = 1:numNodes
-            if ii ~= jj
-                dx = posT(ii,1)-posT(jj,1);
-                dy = posT(ii,2)-posT(jj,2);
-                dz = hgtT(ii)-hgtT(jj);
-                d  = sqrt(dx^2+dy^2+dz^2);
-                el = atan2d(dz, sqrt(dx^2+dy^2));
-                hTx_e = hgtT(ii) + 1.5;
-                hRx_e = hgtT(jj) + 1.5;
-                L  = ituP1411_corrected(fc_MHz_pre, d, hTx_e, hRx_e, el);
-                connT(ii,jj) = (txPower_pre - L - noisePower_pre) > snrThresh_pre;
-            end
-        end
-    end
-
-    % Ищем длиннейший маршрут по всем парам узлов.
-    % Геометрически наиболее удалённая пара (findMostDistantNodes) не всегда
-    % даёт максимальный маршрут по графу связности, поэтому перебираем все пары.
-    maxHops = 0;
-    for s = 1:numNodes
-        for d = 1:numNodes
-            if s ~= d
-                r = findRoute(connT, s, d);
-                if numel(r)-1 > maxHops
-                    maxHops = numel(r)-1;
-                end
-            end
-        end
-    end
-
-    % Принимаем seed если он лучше текущего и не превышает hopMax.
-    % Из всех подходящих seeds выбираем тот, у которого maxHops наибольший.
-    if maxHops <= hopMax && maxHops > bestNhops
-        bestNhops = maxHops;
-        bestSeed  = seedTry;
-        fprintf('  seed=%3d → %d хопов  [обновляем]\n', seedTry, maxHops);
-        % Досрочный выход при достижении верхней границы
-        if bestNhops == hopMax
-            fprintf('  Достигнут целевой максимум, поиск завершён.\n');
-            break;
-        end
-    end
-end
-
-if bestSeed < 0
-    warning('Подходящий seed не найден, используется seed=1.');
-    bestSeed  = 1;
-    bestNhops = 0;
-end
-
-topoSeed = bestSeed;
-fprintf('Выбран seed=%d  (длиннейший маршрут: %d хопов)\n\n', topoSeed, bestNhops);
-
-% --- Генерация финальной топологии с найденным seed ---
-rng(topoSeed);
+rng(42);
 nodePositions = rand(numNodes, 2) * areaSize;
 
-rng(topoSeed);
+rng(42);
 nodeHeights = 5 + rand(numNodes, 1) * 20;   % 5..25 м
 
 X = nodePositions(:, 1);
@@ -161,16 +67,19 @@ end
 %  БЛОК 2: PHY-ПАРАМЕТРЫ LoRa
 %% ============================================================
 % Параметры соответствуют EBYTE E22-868T22U (SX1262, EU868).
+%
+%   txPower_dBm = 10  — намеренно снижено относительно максимума (22 дБм),
+%                       чтобы радиус хопа составил ~80-120 м в NLOS.
+%                       При areaSize=300 м это обеспечивает 3-5 хопов
+%                       на маршруте между наиболее удалёнными узлами.
 
 fc_MHz       = 868;
 fc_Hz        = fc_MHz * 1e6;
-txPower_dBm  = 14;          % дБм — реалистичный LoRa EU868 (EBYTE E22-868T22U),
-                             % в пределах лимита ETSI EN 300 220 (14 дБм ERP,
-                             % duty cycle 1%). При NLOS n=3.8 даёт d_hop ≈ 2 км.
+txPower_dBm  = 14;          % 20 дБм → d_hop ~450 м при SNR>5 дБ (NLOS, n=3.8)
 noiseFigure  = 6;           % дБ, типовой SX1262
 hTx_m        = 1.5;         % высота антенны над точкой монтажа, м
 hRx_m        = 1.5;
-snrThreshold = -7.5;        % дБ, порог чувствительности SF7
+snrThreshold = -7.5;        % дБ, порог SF7
 
 sf          = 7;
 bw          = 125e3;
@@ -246,26 +155,25 @@ fprintf('  SNR: min=%.1f  median=%.1f  max=%.1f дБ\n\n', ...
 %  БЛОК 4: МАРШРУТИЗАЦИЯ И SNR ПО ХОПАМ
 %% ============================================================
 
-% Логика выбора маршрута изменена по сравнению с оригинальной моделью:
-% оригинал использовал findMostDistantNodes как стартовую точку и переходил
-% к перебору всех пар лишь при маршруте < 4 хопов.
-% Здесь сразу выполняется полный перебор всех пар — это корректнее, так как
-% геометрически наиболее удалённая пара не всегда соответствует длиннейшему
-% маршруту в графе связности (два узла могут быть далеко друг от друга,
-% но соединены напрямую одним длинным хопом в пределах зоны покрытия).
-% Seed топологии уже подобран так, что длиннейший маршрут не превышает hopMax.
-bestLen = 0;
-src = 1; dst = 2; route = [];
-for s = 1:numNodes
-    for d = 1:numNodes
-        if s ~= d
-            r = findRoute(connectivity, s, d);
-            if numel(r)-1 > bestLen
-                bestLen = numel(r)-1;
-                src = s; dst = d; route = r;
+[src, dst] = findMostDistantNodes(nodePositions);
+route      = findRoute(connectivity, src, dst);
+
+% Если маршрут слишком короткий — ищем пару с максимальным числом хопов
+if numel(route) < 4
+    bestLen = numel(route);
+    for s = 1:numNodes
+        for d = 1:numNodes
+            if s ~= d
+                r = findRoute(connectivity, s, d);
+                if numel(r) > bestLen
+                    bestLen = numel(r);
+                    src = s; dst = d; route = r;
+                end
             end
         end
     end
+    fprintf('Найден более длинный маршрут: %d→%d (%d хопов)\n\n', ...
+        src, dst, numel(route)-1);
 end
 
 if isempty(route)
@@ -299,7 +207,7 @@ hopThr_bps = nan(nHops, 1);
 for h = 1:nHops
     modem = LoRaModem(fc_Hz, sf, bw, fs, ...
         'CR', CR, 'HasHeader', true, 'UseCRC', true, ...
-        'PreambleLen', 8, 'FastMode', false);
+        'PreambleLen', 8, 'FastMode', true);
 
     channel = RayleighTDLChannel(fs, routeSNR(h), 0, ...
         'PathDelays', tdlDelays, ...
@@ -345,7 +253,7 @@ for si = 1:numel(snr_sweep)
     % FastMode=false: полное декодирование — точные кривые BER/PER
     modem = LoRaModem(fc_Hz, sf, bw, fs, ...
         'CR', CR, 'HasHeader', true, 'UseCRC', true, ...
-        'PreambleLen', 8, 'FastMode', false);
+        'PreambleLen', 8, 'FastMode', true);
 
     [BER_awgn(si), PER_awgn(si), ~] = ...
         LoRaSimulator(modem, AwgnChannel(fs, snr_i)).run(Npkts_sweep, payloadBits);
@@ -385,7 +293,7 @@ ch_h = RayleighTDLChannel(fs, snr_typical, 0, ...
     'PathDelays', tdlDelays, 'PathGains', tdlGains, 'Seed', []);
 % FastMode=false для достоверной оценки PER_hop на типовом SNR
 modem_h = LoRaModem(fc_Hz, sf, bw, fs, ...
-    'CR', CR, 'HasHeader', true, 'UseCRC', true, 'PreambleLen', 8, 'FastMode', false);
+    'CR', CR, 'HasHeader', true, 'UseCRC', true, 'PreambleLen', 8, 'FastMode', true);
 [~, PER_single, ~] = LoRaSimulator(modem_h, ch_h).run(Npkts, payloadBits);
 
 hop_range    = 1:12;
@@ -420,7 +328,7 @@ for vi = 1:numel(velocities)
         % FastMode=false — честный Doppler-sweep
         modem_d = LoRaModem(fc_Hz, sf, bw, fs, ...
             'CR', CR, 'HasHeader', true, 'UseCRC', true, ...
-            'PreambleLen', 8, 'FastMode', false);
+            'PreambleLen', 8, 'FastMode', true);
         ch_d = DopplerChannel(fs, snr_sweep(si), 0, fc_Hz, v, 0, 0);
         [~, PER_dynamic(vi, si), ~] = ...
             LoRaSimulator(modem_d, ch_d).run(Npkts_sweep, payloadBits);
@@ -662,8 +570,7 @@ save(fname, ...
     'PER_dynamic','velocities', ...
     'route','src','dst','nHops', ...
     'sf','bw','payloadBits','Npkts','T_pkt_ms', ...
-    'tdlDelays','tdlGains','snr_typical','PER_single', ...
-    'topoSeed','numNodes','areaSize');
+    'tdlDelays','tdlGains','snr_typical','PER_single');
 
 fprintf('\nРезультаты сохранены: %s\n', fname);
 fprintf('=== Симуляция завершена ===\n');
