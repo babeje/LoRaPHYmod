@@ -91,10 +91,10 @@ snrThreshold = -7.5;        % дБ, порог SF7
 sf          = 7;
 bw          = 125e3;
 fs          = 1e6;
-CR          = 1;
+CR          = 4;
 payloadBits = 128;          % 16 байт — типичная телеметрия UAV/UGV
 Npkts       = 1000;
-Npkts_sweep = 500;
+Npkts_sweep = 1000;
 
 k_B            = 1.38e-23;
 T_K            = 290;

@@ -99,7 +99,7 @@ classdef RayleighTDLChannel < SimpleChannel
             if size(x, 2) > 1
                 x = x(:);
             end
-
+            P_tx = mean(abs(x).^2);
             % Шаг 1: генерация новых коэффициентов замирания на этот пакет.
             % Обоснование: при fd=87 Гц и T_pkt~50 мс коэффициент
             % межпакетной корреляции rho = J0(2*pi*fd*T_pkt) ≈ -0.07,
@@ -115,7 +115,10 @@ classdef RayleighTDLChannel < SimpleChannel
             x_cfo = x_mp .* exp(1j * 2 * pi * obj.cfo_Hz .* t);
 
             % Шаг 4: АБГШ (метод из базового класса, без тулбокса)
-            y = obj.addAwgn(x_cfo, obj.snr_dB);
+            snr_lin = 10^(obj.snr_dB / 10);
+            P_noise = P_tx / snr_lin;
+            noise   = sqrt(P_noise / 2) * (randn(size(x_cfo)) + 1j * randn(size(x_cfo)));
+            y       = x_cfo + noise;
         end
 
         % -----------------------------------------------------------

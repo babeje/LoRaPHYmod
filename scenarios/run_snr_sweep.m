@@ -15,14 +15,14 @@ CR          = 4;
 HasHeader   = true;
 UseCRC      = true;
 PreambleLen = 8;
-FastMode    = false;   % можно true для ускорения
+FastMode    = true;   % можно true для ускорения
 
 % Симуляция
-Npkts          = 10;
-payloadLenBits = 1024;
+Npkts          = 5000;
+payloadLenBits = 128;
 
 % Настройки разброса по ОСШ
-snr_list = -20:1:0;
+snr_list = -12:1:5;
 
 % Настройки доплера
 cases(1).name = "v=0";
@@ -56,18 +56,13 @@ for ci = 1:numel(cases)
             'PreambleLen', PreambleLen, 'FastMode', FastMode);
         
         channel = RayleighTDLChannel(fs, snr_dB, cfo_Hz, ...
-        'PathDelays', [0, 1.0e-6, 4.0e-6], ...
-        'PathGains',  [0, -3, -6], ...
+        'PathDelays', [0,  0.5e-6,  2.0e-6,  4.0e-6], ...
+        'PathGains',  [0,  -4,      -10,     -18], ...
         'Seed', 42);
 
         channel.printInfo();   % проверяем tau_rms перед запуском
         % channel = DopplerChannel(fs, snr_dB, cfo_Hz, rf_freq, ...
         %     cases(ci).v_mps, cases(ci).theta, cases(ci).fd_rate);
-
-        % channel = MultipathChannel(fs, snr_dB, cfo_Hz, ...
-        % 'PathDelays', [0, 10e-6, 20e-6], ...   % пример трёх лучей
-        % 'PathGains', [0, -3, -6], ...           % убывающие мощности
-        % 'MaxDopplerShift', 0);                  % доплер для v=30 м/
 
         sim = LoRaSimulator(modem, channel);
         [ber, per] = sim.run(Npkts, payloadLenBits);

@@ -175,10 +175,10 @@ snrThreshold = -7.5;        % дБ, порог чувствительности 
 sf          = 7;
 bw          = 125e3;
 fs          = 1e6;
-CR          = 1;
+CR          = 4;
 payloadBits = 128;          % 16 байт — типичная телеметрия UAV/UGV
 Npkts       = 1000;
-Npkts_sweep = 500;
+Npkts_sweep = 1000;
 
 k_B            = 1.38e-23;
 T_K            = 290;
@@ -299,7 +299,7 @@ hopThr_bps = nan(nHops, 1);
 for h = 1:nHops
     modem = LoRaModem(fc_Hz, sf, bw, fs, ...
         'CR', CR, 'HasHeader', true, 'UseCRC', true, ...
-        'PreambleLen', 8, 'FastMode', false);
+        'PreambleLen', 8, 'FastMode', true);
 
     channel = RayleighTDLChannel(fs, routeSNR(h), 0, ...
         'PathDelays', tdlDelays, ...
@@ -345,7 +345,7 @@ for si = 1:numel(snr_sweep)
     % FastMode=false: полное декодирование — точные кривые BER/PER
     modem = LoRaModem(fc_Hz, sf, bw, fs, ...
         'CR', CR, 'HasHeader', true, 'UseCRC', true, ...
-        'PreambleLen', 8, 'FastMode', false);
+        'PreambleLen', 8, 'FastMode', true);
 
     [BER_awgn(si), PER_awgn(si), ~] = ...
         LoRaSimulator(modem, AwgnChannel(fs, snr_i)).run(Npkts_sweep, payloadBits);
@@ -385,7 +385,7 @@ ch_h = RayleighTDLChannel(fs, snr_typical, 0, ...
     'PathDelays', tdlDelays, 'PathGains', tdlGains, 'Seed', []);
 % FastMode=false для достоверной оценки PER_hop на типовом SNR
 modem_h = LoRaModem(fc_Hz, sf, bw, fs, ...
-    'CR', CR, 'HasHeader', true, 'UseCRC', true, 'PreambleLen', 8, 'FastMode', false);
+    'CR', CR, 'HasHeader', true, 'UseCRC', true, 'PreambleLen', 8, 'FastMode', true);
 [~, PER_single, ~] = LoRaSimulator(modem_h, ch_h).run(Npkts, payloadBits);
 
 hop_range    = 1:12;
@@ -420,7 +420,7 @@ for vi = 1:numel(velocities)
         % FastMode=false — честный Doppler-sweep
         modem_d = LoRaModem(fc_Hz, sf, bw, fs, ...
             'CR', CR, 'HasHeader', true, 'UseCRC', true, ...
-            'PreambleLen', 8, 'FastMode', false);
+            'PreambleLen', 8, 'FastMode', true);
         ch_d = DopplerChannel(fs, snr_sweep(si), 0, fc_Hz, v, 0, 0);
         [~, PER_dynamic(vi, si), ~] = ...
             LoRaSimulator(modem_d, ch_d).run(Npkts_sweep, payloadBits);
