@@ -409,7 +409,7 @@ sf_colors = [0.00 0.45 0.70;   % SF7  — синий
              0.85 0.33 0.10;   % SF9  — оранжевый
              0.47 0.67 0.19];  % SF12 — зелёный
 
-sf_line_styles = {'-o', '-s', '-^'};   % стиль линии для SF7, SF9, SF12
+sf_markers = {'o', 's', '^'};   % маркер линии для SF7, SF9, SF12
 
 colors = [0.00 0.45 0.70;
           0.85 0.33 0.10;
@@ -550,7 +550,8 @@ for si = 1:nSF
 
     yyaxis left;
     plot(hop_range, PER_e2e_hops_sf(si, :), '-', ...
-        'Color', clr, 'LineWidth', 2.0, sf_line_styles{si}{:});
+        'Color', clr, 'LineWidth', 2.0, ...
+        'Marker', sf_markers{si}, 'MarkerSize', 6, 'MarkerFaceColor', clr);
 
     yyaxis right;
     plot(hop_range, Thr_e2e_hops_sf(si, :), '--', ...
