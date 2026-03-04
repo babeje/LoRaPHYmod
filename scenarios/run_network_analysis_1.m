@@ -170,12 +170,15 @@ txPower_dBm  = 14;          % дБм — реалистичный LoRa EU868 (EB
 noiseFigure  = 6;           % дБ, типовой SX1262
 hTx_m        = 1.5;         % высота антенны над точкой монтажа, м
 hRx_m        = 1.5;
-snrThreshold = -7.5;        % дБ, порог чувствительности SF7
+sf_thresholds = [-7.5, -10.0, -12.5, -15.0, -17.5, -20.0];
+% для SF:          7      8      9     10     11     12
+snrThreshold = sf_thresholds(sf - 6);
+% snrThreshold = -7.5;        % дБ, порог чувствительности SF7
 
 sf          = 7;
 bw          = 125e3;
 fs          = 1e6;
-CR          = 4;
+CR          = 1;
 payloadBits = 128;          % 16 байт — типичная телеметрия UAV/UGV
 Npkts       = 1000;
 Npkts_sweep = 1000;
@@ -407,29 +410,28 @@ fprintf('  SNR_typical=%.1f дБ,  PER_hop=%.4f\n', snr_typical, PER_single);
 %% ============================================================
 %  БЛОК 9: ВЛИЯНИЕ СКОРОСТИ ДВИЖЕНИЯ
 %% ============================================================
-
-fprintf('\nSweep по скоростям...\n');
-
-velocities  = [0, 5, 15, 30];
-PER_dynamic = nan(numel(velocities), numel(snr_sweep));
-
-for vi = 1:numel(velocities)
-    v  = velocities(vi);
-    fd = (v / 3e8) * fc_Hz;
-    for si = 1:numel(snr_sweep)
-        % FastMode=false — честный Doppler-sweep
-        modem_d = LoRaModem(fc_Hz, sf, bw, fs, ...
-            'CR', CR, 'HasHeader', true, 'UseCRC', true, ...
-            'PreambleLen', 8, 'FastMode', true);
-        ch_d = DopplerChannel(fs, snr_sweep(si), 0, fc_Hz, v, 0, 0);
-        [~, PER_dynamic(vi, si), ~] = ...
-            LoRaSimulator(modem_d, ch_d).run(Npkts_sweep, payloadBits);
-    end
-    idx0 = find(snr_sweep == 0, 1);
-    if ~isempty(idx0)
-        fprintf('  v=%2d м/с (fd=%.0f Гц): PER@0дБ=%.3f\n', v, fd, PER_dynamic(vi, idx0));
-    end
-end
+% 
+% fprintf('\nSweep по скоростям...\n');
+% 
+% velocities  = 0;
+% PER_dynamic = nan(numel(velocities), numel(snr_sweep));
+% 
+% for vi = 1:numel(velocities)
+%     v  = velocities(vi);
+%     fd = (v / 3e8) * fc_Hz;
+%     for si = 1:numel(snr_sweep)
+%         modem_d = LoRaModem(fc_Hz, sf, bw, fs, ...
+%             'CR', CR, 'HasHeader', true, 'UseCRC', true, ...
+%             'PreambleLen', 8, 'FastMode', true);
+%         ch_d = DopplerChannel(fs, snr_sweep(si), 0, fc_Hz, v, 0, 0);
+%         [~, PER_dynamic(vi, si), ~] = ...
+%             LoRaSimulator(modem_d, ch_d).run(Npkts_sweep, payloadBits);
+%     end
+%     idx0 = find(snr_sweep == 0, 1);
+%     if ~isempty(idx0)
+%         fprintf('  v=%2d м/с (fd=%.0f Гц): PER@0дБ=%.3f\n', v, fd, PER_dynamic(vi, idx0));
+%     end
+% end
 
 %% ============================================================
 %  БЛОК 10: ГРАФИКИ
@@ -447,29 +449,29 @@ colors = [0.00 0.45 0.70;
 % Причина: один случайный коэффициент h на пакет (медленные замирания) →
 % часть пакетов попадает в глубокие ямы |h|^2 << 1 независимо от SNR.
 figure('Name','PER vs SNR','Color','w','Position',[50 50 680 480]);
-semilogy(snr_sweep, max(PER_awgn, 1e-4), '-o', 'Color', colors(1,:), 'LineWidth', 2, 'MarkerSize', 6);
+semilogy(snr_sweep, max(PER_awgn, 1e-6), '-o', 'Color', colors(1,:), 'LineWidth', 2, 'MarkerSize', 6);
 hold on;
-semilogy(snr_sweep, max(PER_tdl,  1e-4), '-^', 'Color', colors(3,:), 'LineWidth', 2.5, 'MarkerSize', 7);
+semilogy(snr_sweep, max(PER_tdl,  1e-6), '-^', 'Color', colors(3,:), 'LineWidth', 2.5, 'MarkerSize', 6);
 xline(snrThreshold, '--k', 'LineWidth', 1.3, ...
     'Label', sprintf('SF%d threshold = %.1f dB', sf, snrThreshold), ...
     'LabelHorizontalAlignment', 'left');
 xlabel('SNR, dB', 'FontSize', 13); ylabel('PER', 'FontSize', 13);
 title(sprintf('PER vs SNR | SF=%d, BW=%d kHz, CR=4/%d', sf, bw/1e3, CR+4), 'FontSize', 13);
 legend('AWGN (ideal)', 'Rayleigh TDL (urban, diversity floor)', 'Location', 'southwest');
-grid on; ylim([1e-4 1]); xlim([snr_sweep(1) snr_sweep(end)]); hold off;
+grid on; ylim([1e-6 1]); xlim([snr_sweep(1) snr_sweep(end)]); hold off;
 
 % --- График 2: BER vs SNR ---
 figure('Name','BER vs SNR','Color','w','Position',[70 70 680 480]);
-semilogy(snr_sweep, max(BER_awgn, 1e-5), '-o', 'Color', colors(1,:), 'LineWidth', 2, 'MarkerSize', 6);
+semilogy(snr_sweep, max(BER_awgn, 1e-6), '-o', 'Color', colors(1,:), 'LineWidth', 2, 'MarkerSize', 6);
 hold on;
-semilogy(snr_sweep, max(BER_tdl,  1e-5), '-^', 'Color', colors(3,:), 'LineWidth', 2.5, 'MarkerSize', 7);
+semilogy(snr_sweep, max(BER_tdl,  1e-6), '-^', 'Color', colors(3,:), 'LineWidth', 2.5, 'MarkerSize', 6);
 xline(snrThreshold, '--k', 'LineWidth', 1.3, ...
     'Label', sprintf('SF%d threshold = %.1f dB', sf, snrThreshold), ...
     'LabelHorizontalAlignment', 'left');
 xlabel('SNR, dB', 'FontSize', 13); ylabel('BER', 'FontSize', 13);
 title(sprintf('BER vs SNR | SF=%d, BW=%d kHz, CR=4/%d', sf, bw/1e3, CR+4), 'FontSize', 13);
 legend('AWGN (ideal)', 'Rayleigh TDL (urban, diversity floor)', 'Location', 'southwest');
-grid on; ylim([1e-5 1]); xlim([snr_sweep(1) snr_sweep(end)]); hold off;
+grid on; ylim([1e-6 1]); xlim([snr_sweep(1) snr_sweep(end)]); hold off;
 
 % --- График 3а: SNR между узлами маршрута (стиль bar, подписи N→M) ---
 % Условие nHops > 1 убрано — график строится всегда, даже при одном хопе.
@@ -553,7 +555,7 @@ ax4 = gca;
 
 yyaxis left;
 plot(hop_range, PER_e2e_hops, '-o', ...
-    'Color', colors(2,:), 'LineWidth', 2, 'MarkerSize', 8, ...
+    'Color', colors(2,:), 'LineWidth', 2, 'MarkerSize', 5, ...
     'MarkerFaceColor', colors(2,:));
 ylabel('PER_{e2e}', 'FontSize', 13);
 ylim([0, 1]);
@@ -582,17 +584,17 @@ xlim([1, hop_range(end)]);
 set(gca, 'XTick', hop_range);
 
 % --- График 5: PER vs SNR при разных скоростях ---
-figure('Name','PER vs SNR — Doppler','Color','w','Position',[130 130 680 480]);
-vel_labels = cell(numel(velocities), 1);
-for vi = 1:numel(velocities)
-    fd_v = (velocities(vi) / 3e8) * fc_Hz;
-    semilogy(snr_sweep, max(PER_dynamic(vi,:), 1e-4), '-', 'Color', colors(vi,:), 'LineWidth', 2); hold on;
-    vel_labels{vi} = sprintf('v = %d m/s  (f_D = %.0f Hz)', velocities(vi), fd_v);
-end
-xlabel('SNR, dB', 'FontSize', 13); ylabel('PER', 'FontSize', 13);
-title(sprintf('PER vs SNR | SF=%d — Effect of Node Velocity', sf), 'FontSize', 13);
-legend(vel_labels, 'Location', 'southwest');
-grid on; ylim([1e-3 1]); xlim([snr_sweep(1) snr_sweep(end)]);
+% figure('Name','PER vs SNR — Doppler','Color','w','Position',[130 130 680 480]);
+% vel_labels = cell(numel(velocities), 1);
+% for vi = 1:numel(velocities)
+%     fd_v = (velocities(vi) / 3e8) * fc_Hz;
+%     semilogy(snr_sweep, max(PER_dynamic(vi,:), 1e-4), '-', 'Color', colors(vi,:), 'LineWidth', 2); hold on;
+%     vel_labels{vi} = sprintf('v = %d m/s  (f_D = %.0f Hz)', velocities(vi), fd_v);
+% end
+% xlabel('SNR, dB', 'FontSize', 13); ylabel('PER', 'FontSize', 13);
+% title(sprintf('PER vs SNR | SF=%d — Effect of Node Velocity', sf), 'FontSize', 13);
+% legend(vel_labels, 'Location', 'southwest');
+% grid on; ylim([1e-3 1]); xlim([snr_sweep(1) snr_sweep(end)]);
 
 % --- График 6: 3D-сеть ---
 % Проблема плоского вида: при areaSize=1200 м и высотах Z=5..25 м
@@ -624,9 +626,9 @@ end
 scatter3(X, Y, Z, 80, Z, 'filled', 'MarkerEdgeColor', [0.3 0.3 0.3], 'LineWidth', 0.5);
 
 % Выделить src и dst отдельно
-plot3(X(src), Y(src), Z(src), 'p', 'MarkerSize', 16, ...
+plot3(X(src), Y(src), Z(src), 'p', 'MarkerSize', 10, ...
     'MarkerFaceColor', [0 0.6 0], 'MarkerEdgeColor', 'k', 'LineWidth', 1.2);
-plot3(X(dst), Y(dst), Z(dst), 'h', 'MarkerSize', 16, ...
+plot3(X(dst), Y(dst), Z(dst), 'h', 'MarkerSize', 10, ...
     'MarkerFaceColor', [0.8 0 0], 'MarkerEdgeColor', 'k', 'LineWidth', 1.2);
 text(X(src)+20, Y(src)+20, Z(src)+1, sprintf('src=%d', src), 'FontSize', 10, 'FontWeight', 'bold', 'Color', [0 0.5 0]);
 text(X(dst)+20, Y(dst)+20, Z(dst)+1, sprintf('dst=%d', dst), 'FontSize', 10, 'FontWeight', 'bold', 'Color', [0.7 0 0]);
@@ -653,17 +655,28 @@ if ~exist(outDir, 'dir'), mkdir(outDir); end
 ts    = datestr(now, 'yyyymmdd_HHMMSS');
 fname = fullfile(outDir, ['network_analysis_' ts '.mat']);
 save(fname, ...
-    'snr_sweep', ...
+        'snr_sweep', ...
     'BER_awgn','BER_rayleigh','BER_tdl', ...
     'PER_awgn','PER_rayleigh','PER_tdl', ...
     'routeSNR','routeDist','hopBER','hopPER','hopThr_bps', ...
     'PER_e2e','Thr_e2e','delay_no_arq_ms','delay_arq_ms', ...
     'PER_e2e_hops','Thr_e2e_hops','hop_range', ...
-    'PER_dynamic','velocities', ...
     'route','src','dst','nHops', ...
     'sf','bw','payloadBits','Npkts','T_pkt_ms', ...
     'tdlDelays','tdlGains','snr_typical','PER_single', ...
     'topoSeed','numNodes','areaSize');
+    % 'snr_sweep', ...
+    % 'BER_awgn','BER_rayleigh','BER_tdl', ...
+    % 'PER_awgn','PER_rayleigh','PER_tdl', ...
+    % 'routeSNR','routeDist','hopBER','hopPER','hopThr_bps', ...
+    % 'PER_e2e','Thr_e2e','delay_no_arq_ms','delay_arq_ms', ...
+    % 'PER_e2e_hops','Thr_e2e_hops','hop_range', ...
+    % 'PER_dynamic','velocities', ...
+    % 'route','src','dst','nHops', ...
+    % 'sf','bw','payloadBits','Npkts','T_pkt_ms', ...
+    % 'tdlDelays','tdlGains','snr_typical','PER_single', ...
+    % 'topoSeed','numNodes','areaSize');
+    
 
 fprintf('\nРезультаты сохранены: %s\n', fname);
 fprintf('=== Симуляция завершена ===\n');
