@@ -44,12 +44,12 @@ classdef LoRaSimulator < handle
                     pkt_ok = false;
                 end
 
-                % Отладочный вывод для первого пакета
-                if k == 1
-                    disp('TX bits:'); disp(bits_tx.');
-                    disp('RX bits:'); disp(bits_rx.');
-                    fprintf('pkt_ok = %d\n', pkt_ok);
-                end
+                % % Отладочный вывод для первого пакета
+                % if k == 1
+                %     disp('TX bits:'); disp(bits_tx.');
+                %     disp('RX bits:'); disp(bits_rx.');
+                %     fprintf('pkt_ok = %d\n', pkt_ok);
+                % end
 
                 if ~pkt_ok
                     nPktErr = nPktErr + 1;
