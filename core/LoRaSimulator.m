@@ -49,7 +49,7 @@ classdef LoRaSimulator < handle
             nSuccess       = 0;   % успешно принятые пакеты
 
             for k = 1:Npkts
-                bits_tx = randi([0 1], payloadLenBits, 1, 'logical');
+                bits_tx = logical(randi([0 1], payloadLenBits, 1));
 
                 [txSig, ~, ~]        = obj.modem.modulate(bits_tx);
                 rxSig                = obj.channel.pass(txSig);

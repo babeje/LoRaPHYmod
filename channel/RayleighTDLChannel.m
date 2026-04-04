@@ -1,162 +1,239 @@
 classdef RayleighTDLChannel < SimpleChannel
-    % RayleighTDLChannel — частотно-селективный канал с медленными
-    % релеевскими замираниями на основе модели TDL (tapped delay line).
+    % RayleighTDLChannel — частотно-селективный канал Релея, TDL-модель.
     %
-    % Физическое обоснование (ITU-R P.1411-10, городская застройка, 300 м):
-    %   tau_rms  ≈ 1.77 мкс  →  Bc ≈ 1/(10*tau_rms) ≈ 56.5 кГц
-    %   BW = 125 кГц > 2*Bc  →  частотно-селективный канал
-    %   T_c ≈ 2.06 мс > T_sym ≈ 1.02 мс (SF=7)  →  медленные замирания
+    % Поддерживает два режима замираний:
     %
-    % Допущения модели:
-    %   - коэффициенты лучей постоянны в пределах одного пакета (slow fading);
-    %   - между пакетами коэффициенты обновляются независимо (т.к. rho ≈ 0
-    %     при fd=87 Гц и T_pkt~50 мс: J0(2*pi*87*0.05) ≈ -0.07);
-    %   - нет зависимости от Communications Toolbox.
+    %   'PerPacket'  — один коэффициент h на весь пакет (block fading).
+    %                  Устанавливается автоматически, если SF/BW не заданы.
+    %                  Поведение идентично предыдущей версии класса.
     %
-    % Использование:
-    %   ch = RayleighTDLChannel(fs, snr_dB, cfo_Hz);           % параметры по умолчанию
+    %   'PerSymbol'  — коэффициент h обновляется раз в символ по модели AR(1).
+    %                  Устанавливается автоматически при задании SF и BW.
+    %                  Физически корректно: T_c > T_sym (медленные замирания),
+    %                  канал постоянен внутри символа, но меняется между ними.
+    %
+    % Модель AR(1) для каждого луча k:
+    %
+    %   h_k[n] = rho * h_k[n-1] + sqrt(1 - rho^2) * sigma_k * w[n]
+    %   w[n]   ~ CN(0, 1)
+    %   rho    = J0(2*pi * f_D * T_sym)
+    %
+    % При rho=1 (f_D=0) канал замерзает — эквивалент PerPacket на масштабе пакета.
+    % При rho=0         — независимые символы (AR(0)).
+    % При rho≈0.92      — реалистичный сценарий: v=30 м/с, SF7, f_c=868 МГц.
+    %
+    % Корреляция AR(1) воспроизводит корреляционную функцию модели Джейкса
+    % на временно́м масштабе символа без использования Communications Toolbox.
+    %
+    % Обратная совместимость:
+    %   Все существующие вызовы вида
+    %       RayleighTDLChannel(fs, snr_dB, cfo_Hz, 'PathDelays', ..., 'Seed', ...)
+    %   работают без изменений — режим PerPacket включается автоматически.
+    %
+    % Использование (PerSymbol, рекомендуется):
     %   ch = RayleighTDLChannel(fs, snr_dB, cfo_Hz, ...
-    %           'PathDelays', [0, 1e-6, 3.5e-6], ...
-    %           'PathGains',  [0, -3, -6], ...
-    %           'Seed', 42);
-    %   rxSig = ch.pass(txSig);
+    %       'SF', 7, 'BW', 125e3, ...
+    %       'DopplerHz', 87, ...
+    %       'PathDelays', [0, 0.5e-6, 1.5e-6], ...
+    %       'PathGains',  [0, -6, -12], ...
+    %       'Seed', 42);
     %
-    % Цепочка обработки в методе pass():
-    %   txSig → applyTDL() → CFO → addAwgn() → rxSig
+    % Использование (PerPacket, для сравнения):
+    %   ch = RayleighTDLChannel(fs, snr_dB, cfo_Hz, ...
+    %       'PathDelays', [0, 0.5e-6, 1.5e-6], ...
+    %       'PathGains',  [0, -6, -12], ...
+    %       'Seed', 42);
     %
     % Совместимость: MATLAB R2024a, без дополнительных тулбоксов.
 
-    % ---------------------------------------------------------------
-    % Открытые свойства — параметры канала
-    % ---------------------------------------------------------------
+    % ------------------------------------------------------------------
+    % Публичные свойства
+    % ------------------------------------------------------------------
     properties
-        pathDelays_s    % задержки лучей [L×1], секунды
-        pathGains_dB    % средние мощности лучей [L×1], дБ
-        seed            % seed для воспроизводимости ([] = случайный)
+        pathDelays_s        % [L×1] задержки лучей, с
+        pathGains_dB        % [L×1] средние мощности лучей, дБ
+        seed                % seed RNG ([] = случайный)
+        sf                  % Spreading Factor ([] если не задан)
+        bw                  % полоса сигнала, Гц ([] если не задана)
+        dopplerHz           % максимальная допплеровская частота, Гц
+        fadingGranularity   % 'PerPacket' | 'PerSymbol'
     end
 
-    % ---------------------------------------------------------------
-    % Скрытые свойства — внутреннее состояние
-    % ---------------------------------------------------------------
+    % ------------------------------------------------------------------
+    % Приватные свойства — внутреннее состояние
+    % ------------------------------------------------------------------
     properties (Access = private)
-        h_current       % текущий вектор комплексных коэффициентов [L×1]
-        rng_state       % состояние генератора случайных чисел
+        h_current       % [L×1] текущее состояние AR(1) (инициализируется в конструкторе)
+        h_initial       % [L×1] начальное состояние для resetRng()
+        N_sym           % длина символа в отсчётах = round(2^sf / bw * fs)
+        rho             % коэффициент AR(1): J0(2*pi * f_D * T_sym)
+        gains_lin_norm  % [L×1] нормированные линейные мощности лучей (предвычислено)
+        rng_state       % состояние RNG при инициализации
     end
 
-    % ---------------------------------------------------------------
+    % ------------------------------------------------------------------
     % Публичные методы
-    % ---------------------------------------------------------------
+    % ------------------------------------------------------------------
     methods
 
-        % -----------------------------------------------------------
+        % --------------------------------------------------------------
         % Конструктор
-        % -----------------------------------------------------------
+        % --------------------------------------------------------------
         function obj = RayleighTDLChannel(fs, snr_dB, cfo_Hz, varargin)
-            % Вызов конструктора базового класса SimpleChannel
+            % Вызов конструктора базового класса
             obj@SimpleChannel(fs, snr_dB, cfo_Hz);
 
-            % Параметры TDL по умолчанию:
-            % Трёхлучевой профиль для городской среды (ITU-R P.1411-10).
-            % Задержки подобраны так, чтобы tau_rms ≈ 1.77 мкс.
-            % При fs=1e6: задержки в отсчётах = [0, 1, 4].
-            defaultDelays = [0, 1.0e-6, 4.0e-6];
-            defaultGains  = [0, -3, -6];
-
+            % Параметры TDL по умолчанию (3 луча, tau_rms ≈ 0.6 мкс)
             p = inputParser;
-            addParameter(p, 'PathDelays', defaultDelays);
-            addParameter(p, 'PathGains',  defaultGains);
-            addParameter(p, 'Seed',       []);     % [] = новый seed при каждом запуске
+            addParameter(p, 'PathDelays', [0, 0.5e-6, 1.5e-6]);
+            addParameter(p, 'PathGains',  [0, -6,     -12]);
+            addParameter(p, 'Seed',       []);
+            addParameter(p, 'SF',         []);   % задать для режима PerSymbol
+            addParameter(p, 'BW',         []);   % задать для режима PerSymbol
+            addParameter(p, 'DopplerHz',  0);    % f_D, Гц
+            addParameter(p, 'FadingGranularity', []);  % [] = автоопределение
             parse(p, varargin{:});
 
-            obj.pathDelays_s = p.Results.PathDelays(:);
-            obj.pathGains_dB = p.Results.PathGains(:);
-            obj.seed         = p.Results.Seed;
+            obj.pathDelays_s  = p.Results.PathDelays(:);
+            obj.pathGains_dB  = p.Results.PathGains(:);
+            obj.seed          = p.Results.Seed;
+            obj.sf            = p.Results.SF;
+            obj.bw            = p.Results.BW;
+            obj.dopplerHz     = p.Results.DopplerHz;
 
-            % Проверка согласованности размеров
-            if numel(obj.pathDelays_s) ~= numel(obj.pathGains_dB)
-                error('RayleighTDLChannel: PathDelays и PathGains должны иметь одинаковую длину.');
+            % Проверка согласованности профиля
+            assert(numel(obj.pathDelays_s) == numel(obj.pathGains_dB), ...
+                'RayleighTDLChannel: PathDelays и PathGains должны иметь одинаковую длину.');
+
+            % Автоматическое определение режима замираний:
+            %   SF+BW заданы → PerSymbol (физически корректно)
+            %   иначе        → PerPacket (обратная совместимость)
+            fg = p.Results.FadingGranularity;
+            if isempty(fg)
+                if ~isempty(obj.sf) && ~isempty(obj.bw)
+                    fg = 'PerSymbol';
+                else
+                    fg = 'PerPacket';
+                end
+            end
+            obj.fadingGranularity = fg;
+
+            % Проверка: PerSymbol требует SF и BW
+            if strcmp(obj.fadingGranularity, 'PerSymbol')
+                assert(~isempty(obj.sf) && ~isempty(obj.bw), ...
+                    ['RayleighTDLChannel: для FadingGranularity=''PerSymbol'' ', ...
+                     'необходимо задать параметры ''SF'' и ''BW''.']);
             end
 
-            % Инициализация генератора случайных чисел
-            obj.initRng();
+            % Вычисление параметров символа и AR(1)
+            if ~isempty(obj.sf) && ~isempty(obj.bw)
+                obj.N_sym = round((2^obj.sf / obj.bw) * obj.fs);
+                T_sym     = 2^obj.sf / obj.bw;
+                % Коэффициент AR(1): rho = J0(2*pi * f_D * T_sym)
+                % J0 — функция Бесселя первого рода нулевого порядка (besselj)
+                obj.rho   = besselj(0, 2*pi * obj.dopplerHz * T_sym);
+            else
+                obj.N_sym = [];
+                obj.rho   = 0;
+            end
 
-            % Предварительная генерация коэффициентов
+            % Предвычисление нормированных линейных мощностей лучей.
+            % Нормировка: sum(gains_lin_norm) = 1 → канал не вносит
+            % среднего усиления/ослабления.
+            gains        = 10.^(obj.pathGains_dB / 10);
+            obj.gains_lin_norm = gains / sum(gains);
+
+            % Инициализация генератора случайных чисел
+            if ~isempty(obj.seed)
+                rng(obj.seed, 'twister');
+            end
+            obj.rng_state = rng;
+
+            % Инициализация состояния AR(1) из стационарного распределения.
+            % Это физически корректно: h_k[0] ~ CN(0, gains_norm(k)).
             obj.h_current = obj.genRayleighCoeffs();
+            obj.h_initial = obj.h_current;
         end
 
-        % -----------------------------------------------------------
-        % Основной метод: прохождение сигнала через канал
-        % -----------------------------------------------------------
+        % --------------------------------------------------------------
+        % Прохождение сигнала через канал
+        % --------------------------------------------------------------
         function y = pass(obj, x)
-            % pass — применяет TDL-канал, CFO и AWGN к входному сигналу.
+            % pass — применяет TDL-замирания, CFO и АБГШ.
             %
-            % Аргументы:
-            %   x — комплексный baseband-сигнал (вектор, столбец или строка)
-            % Возвращает:
-            %   y — сигнал после канала
+            % Цепочка: applyTDL → CFO-поворот → AWGN
+            % Длина выхода равна длине входа (критично для детектора преамбулы).
 
-            % Приводим к столбцу
             if size(x, 2) > 1
                 x = x(:);
             end
             P_tx = mean(abs(x).^2);
-            % Шаг 1: генерация новых коэффициентов замирания на этот пакет.
-            % Обоснование: при fd=87 Гц и T_pkt~50 мс коэффициент
-            % межпакетной корреляции rho = J0(2*pi*fd*T_pkt) ≈ -0.07,
-            % т.е. пакеты практически декоррелированы → независимая
-            % генерация физически оправдана.
-            obj.h_current = obj.genRayleighCoeffs();
 
-            % Шаг 2: применение TDL (частотная селективность)
+            % PerPacket: обновить h независимо перед каждым пакетом.
+            % PerSymbol: h_current — это AR(1)-состояние, оно обновляется
+            %            внутри applyTDL(), обеспечивая непрерывность процесса
+            %            между пакетами.
+            if strcmp(obj.fadingGranularity, 'PerPacket')
+                obj.h_current = obj.genRayleighCoeffs();
+            end
+
+            % Применение TDL (замирания + многолучевость)
             x_mp = obj.applyTDL(x);
 
-            % Шаг 3: CFO (как в SimpleChannel)
+            % CFO-поворот
             t     = (0:length(x_mp)-1).' / obj.fs;
             x_cfo = x_mp .* exp(1j * 2 * pi * obj.cfo_Hz .* t);
 
-            % Шаг 4: АБГШ (метод из базового класса, без тулбокса)
+            % АБГШ (SNR нормируется по мощности переданного сигнала)
             snr_lin = 10^(obj.snr_dB / 10);
             P_noise = P_tx / snr_lin;
             noise   = sqrt(P_noise / 2) * (randn(size(x_cfo)) + 1j * randn(size(x_cfo)));
             y       = x_cfo + noise;
         end
 
-        % -----------------------------------------------------------
-        % Вспомогательный метод: вычисление tau_rms для текущего профиля
-        % -----------------------------------------------------------
+        % --------------------------------------------------------------
+        % Вычисление tau_rms для текущего профиля
+        % --------------------------------------------------------------
         function tau = calcTauRms(obj)
-            % calcTauRms — вычисляет среднеквадратичный разброс задержек
-            % по текущему профилю PDP.
-            %
-            % Используется для верификации: полученное значение должно
-            % соответствовать tau_rms ≈ 1.77 мкс (ITU-R P.1411-10).
-
-            gains_lin = 10.^(obj.pathGains_dB / 10);
-            gains_lin = gains_lin / sum(gains_lin);     % нормировка
-
-            tau_mean = sum(obj.pathDelays_s .* gains_lin);
-            tau = sqrt(sum((obj.pathDelays_s - tau_mean).^2 .* gains_lin));
+            % calcTauRms — СКО задержек по профилю PDP, секунды.
+            tau_mean = sum(obj.pathDelays_s .* obj.gains_lin_norm);
+            tau      = sqrt(sum((obj.pathDelays_s - tau_mean).^2 .* obj.gains_lin_norm));
         end
 
-        % -----------------------------------------------------------
-        % Вспомогательный метод: отображение параметров канала
-        % -----------------------------------------------------------
+        % --------------------------------------------------------------
+        % Вывод параметров канала
+        % --------------------------------------------------------------
         function printInfo(obj)
-            % printInfo — выводит сводку по параметрам канала.
-            % Удобно для быстрой проверки перед запуском симуляции.
-
             fprintf('--- RayleighTDLChannel ---\n');
-            fprintf('  SNR        = %.1f dБ\n',  obj.snr_dB);
-            fprintf('  CFO        = %.1f Гц\n',  obj.cfo_Hz);
-            fprintf('  fs         = %.3g Гц\n',  obj.fs);
+            fprintf('  SNR        = %.1f дБ\n', obj.snr_dB);
+            fprintf('  CFO        = %.1f Гц\n', obj.cfo_Hz);
+            fprintf('  fs         = %.3g Гц\n', obj.fs);
+            fprintf('  Режим замираний : %s\n', obj.fadingGranularity);
             fprintf('  Число лучей: %d\n', numel(obj.pathDelays_s));
-            fprintf('  %-12s %-14s %-14s\n', 'Луч', 'Задержка (мкс)', 'Мощность (дБ)');
+            fprintf('  %-6s %-16s %-14s\n', 'Луч', 'Задержка, мкс', 'Мощность, дБ');
             for k = 1:numel(obj.pathDelays_s)
-                fprintf('  %-12d %-14.2f %-14.1f\n', k, ...
+                fprintf('  %-6d %-16.3f %-14.1f\n', k, ...
                     obj.pathDelays_s(k)*1e6, obj.pathGains_dB(k));
             end
-            fprintf('  tau_rms    = %.3f мкс\n', obj.calcTauRms()*1e6);
-            fprintf('  Bc (оценка) = %.1f кГц\n', 1/(10*obj.calcTauRms())/1e3);
+            tau_rms = obj.calcTauRms();
+            fprintf('  tau_rms    = %.3f мкс\n', tau_rms*1e6);
+            fprintf('  Bc (1/5·tau_rms) = %.1f кГц\n', ...
+                1 / (5 * max(tau_rms, eps)) / 1e3);
+            if ~isempty(obj.sf)
+                T_sym = 2^obj.sf / obj.bw;
+                fprintf('  SF=%d, BW=%.0f кГц\n', obj.sf, obj.bw/1e3);
+                fprintf('  T_sym = %.3f мс,  N_sym = %d отсчётов\n', ...
+                    T_sym*1e3, obj.N_sym);
+                fprintf('  f_D   = %.1f Гц\n', obj.dopplerHz);
+                fprintf('  rho   = %.4f  (J0(2π·f_D·T_sym))\n', obj.rho);
+                rho_pkt = besselj(0, 2*pi * obj.dopplerHz * ...
+                    (obj.N_sym / obj.fs) * ceil(2000 / obj.N_sym));
+                fprintf('  Замечание: T_c/T_sym ≈ %.1f → %s\n', ...
+                    0.423 / (max(obj.dopplerHz, 0.1) * T_sym), ...
+                    ternary(strcmp(obj.fadingGranularity, 'PerSymbol'), ...
+                        'символьные замирания (физически корректно)', ...
+                        'блоковые замирания'));
+            end
             if ~isempty(obj.seed)
                 fprintf('  Seed       = %d\n', obj.seed);
             else
@@ -165,107 +242,154 @@ classdef RayleighTDLChannel < SimpleChannel
             fprintf('--------------------------\n');
         end
 
-    end % methods (public)
-
-    % ---------------------------------------------------------------
-    % Приватные методы
-    % ---------------------------------------------------------------
-    methods (Access = private)
-
-        % -----------------------------------------------------------
-        % Инициализация генератора случайных чисел
-        % -----------------------------------------------------------
-        function initRng(obj)
-            % initRng — устанавливает состояние RNG.
-            %
-            % Если seed задан — симуляция воспроизводима.
-            % Состояние сохраняется в obj.rng_state для возможного
-            % последующего сброса через resetRng().
-            if ~isempty(obj.seed)
-                rng(obj.seed, 'twister');
-            end
-            obj.rng_state = rng;    % сохраняем текущее состояние
+        % --------------------------------------------------------------
+        % Сброс генератора к начальному состоянию
+        % --------------------------------------------------------------
+        function resetRng(obj)
+            % resetRng — восстанавливает состояние RNG и h_current
+            % до значений на момент конструктора. Позволяет повторить
+            % ровно тот же канал при повторном запуске симуляции.
+            rng(obj.rng_state);
+            obj.h_current = obj.h_initial;
         end
 
-        % -----------------------------------------------------------
-        % Генерация комплексных коэффициентов Рэлея
-        % -----------------------------------------------------------
+    end % methods (public)
+
+    % ------------------------------------------------------------------
+    % Приватные методы
+    % ------------------------------------------------------------------
+    methods (Access = private)
+
+        % --------------------------------------------------------------
+        % Генерация вектора комплексных коэффициентов Релея
+        % --------------------------------------------------------------
         function h = genRayleighCoeffs(obj)
-            % genRayleighCoeffs — генерирует независимый вектор
-            % комплексных коэффициентов для каждого луча TDL.
+            % genRayleighCoeffs — одна реализация h из стационарного
+            % распределения: h_k ~ CN(0, gains_norm(k)).
             %
-            % Математика:
-            %   h_k ~ CN(0, sigma_k^2),  sigma_k^2 = gains_lin(k)
-            %   h_k = sigma_k/sqrt(2) * (randn + j*randn)
-            %
-            % Нормировка гарантирует: sum(E{|h_k|^2}) = 1,
-            % т.е. канал не вносит среднего усиления/ослабления.
-            %
-            % Это чистый Рэлей (нет LOS). Для добавления Райса:
-            %   h_k += sqrt(K/(K+1)) * exp(j*phi_los)
-            % и sigma_k^2 = gains_lin(k) / (K+1).
-
-            L         = numel(obj.pathDelays_s);
-            gains_lin = 10.^(obj.pathGains_dB / 10);
-            gains_lin = gains_lin / sum(gains_lin);     % нормировка на 1
-
+            % Используется:
+            %   - в конструкторе (инициализация состояния AR(1));
+            %   - в pass() при режиме PerPacket (независимый h на пакет).
+            L = numel(obj.pathDelays_s);
             h = zeros(L, 1);
             for k = 1:L
-                sigma = sqrt(gains_lin(k) / 2);         % СКО на I и Q
+                sigma = sqrt(obj.gains_lin_norm(k) / 2);
                 h(k)  = sigma * (randn + 1j * randn);
             end
         end
 
-        % -----------------------------------------------------------
-        % Применение TDL-свёртки к сигналу
-        % -----------------------------------------------------------
+        % --------------------------------------------------------------
+        % TDL-свёртка с замираниями
+        % --------------------------------------------------------------
         function y = applyTDL(obj, x)
-            % applyTDL — реализует свёртку входного сигнала с импульсной
-            % характеристикой TDL-канала.
+            % applyTDL — применяет TDL-канал к сигналу x.
             %
-            % Дискретная модель:
-            %   y[n] = sum_k( h_k * x[n - d_k] )
+            % Дискретная модель (PerPacket):
+            %   y[n] = sum_k h_k * x[n - d_k]
             %
-            % где d_k = round(tau_k * fs) — задержка k-го луча в отсчётах.
+            % Дискретная модель (PerSymbol):
+            %   y[n] = sum_k h_k[sym(n)] * x[n - d_k]
             %
-            % Граничное условие: отсчёты за пределами x считаются нулями
-            % (нет истории до начала пакета). Это стандартное допущение
-            % для пакетной симуляции без межпакетной интерференции.
+            % где sym(n) = floor(n / N_sym) — номер символа отсчёта n.
             %
-            % Примечание по длине выхода:
-            %   Выход y имеет ту же длину, что и вход x. Хвост свёртки
-            %   (длиной max(d_k)) отбрасывается. При tau_max=4 мкс и
-            %   fs=1e6 это 4 отсчёта из ~10000+ — пренебрежимо мало.
+            % Граничное условие: x[n] = 0 при n < 0.
+            % Длина выхода = длине входа (хвост свёртки отбрасывается,
+            % что при tau_max << T_sym несущественно).
 
             N = length(x);
             y = zeros(N, 1);
 
-            for k = 1:numel(obj.pathDelays_s)
-                d = round(obj.pathDelays_s(k) * obj.fs);   % задержка в отсчётах
-
-                if d == 0
-                    % Нулевая задержка: прямое умножение без сдвига
-                    y = y + obj.h_current(k) * x;
-                elseif d < N
-                    % Сдвиг на d отсчётов вправо (задержка)
-                    % y[d+1 .. N] += h_k * x[1 .. N-d]
-                    y(d+1:end) = y(d+1:end) + obj.h_current(k) * x(1:end-d);
+            if strcmp(obj.fadingGranularity, 'PerPacket')
+                % ======================================================
+                %  PerPacket: один h на весь пакет
+                % ======================================================
+                for k = 1:numel(obj.pathDelays_s)
+                    d = round(obj.pathDelays_s(k) * obj.fs);
+                    if d == 0
+                        y = y + obj.h_current(k) * x;
+                    elseif d < N
+                        y(d+1:end) = y(d+1:end) + obj.h_current(k) * x(1:end-d);
+                    end
+                    % d >= N → луч за окном пакета, игнорируем
                 end
-                % Если d >= N — луч полностью вне окна пакета, игнорируем
+
+            else
+                % ======================================================
+                %  PerSymbol: AR(1), один h на символ
+                % ======================================================
+                N_sym  = obj.N_sym;
+                nSyms  = ceil(N / N_sym);
+                L      = numel(obj.pathDelays_s);
+
+                % Генерация последовательности коэффициентов h[n]
+                % для всех символов пакета по рекуррентной формуле AR(1):
+                %
+                %   h_k[n] = rho * h_k[n-1] + sqrt(1-rho^2) * sigma_k * w_k[n]
+                %   w_k[n] ~ CN(0, 1)
+                %
+                % Начальное состояние h_current сохраняется между пакетами,
+                % обеспечивая непрерывность AR(1)-процесса.
+                h_seq  = zeros(L, nSyms);
+                h_prev = obj.h_current;
+                coeff  = sqrt(1 - obj.rho^2);
+
+                for n = 1:nSyms
+                    h_new = zeros(L, 1);
+                    for k = 1:L
+                        sigma   = sqrt(obj.gains_lin_norm(k) / 2);
+                        w       = sigma * (randn + 1j * randn);
+                        h_new(k) = obj.rho * h_prev(k) + coeff * w;
+                    end
+                    h_seq(:, n) = h_new;
+                    h_prev      = h_new;
+                end
+
+                % Обновляем состояние для следующего пакета
+                obj.h_current = h_prev;
+
+                % Применение TDL: для каждого луча — посимвольная свёртка.
+                % Каждый отсчёт y[m] использует h_k того символа, которому
+                % принадлежит m: sym = ceil(m / N_sym).
+                for k = 1:L
+                    d = round(obj.pathDelays_s(k) * obj.fs);
+                    if d >= N
+                        continue;
+                    end
+
+                    for n = 1:nSyms
+                        % Диапазон выходных отсчётов символа n
+                        dst_s = (n-1)*N_sym + 1;
+                        dst_e = min(n*N_sym, N);
+                        h_k   = h_seq(k, n);
+
+                        % Исходные отсчёты (с учётом задержки d)
+                        src_s = dst_s - d;
+                        src_e = dst_e - d;
+
+                        if src_e < 1
+                            continue;   % весь диапазон до начала сигнала
+                        end
+
+                        % Обрезаем левый край, если src_s < 1
+                        skip  = max(0, 1 - src_s);
+                        dst_s = dst_s + skip;
+                        src_s = src_s + skip;
+
+                        if dst_s > dst_e
+                            continue;
+                        end
+
+                        y(dst_s:dst_e) = y(dst_s:dst_e) + h_k * x(src_s:src_e);
+                    end
+                end
             end
         end
 
     end % methods (private)
 
-    % ---------------------------------------------------------------
-    % Метод сброса RNG (публичный, для управления воспроизводимостью)
-    % ---------------------------------------------------------------
-    methods
-        function resetRng(obj)
-            % resetRng — сбрасывает генератор в сохранённое начальное
-            % состояние. Позволяет повторить ровно тот же канал.
-            rng(obj.rng_state);
-        end
-    end
+end
 
+% Вспомогательная функция: тернарный оператор для printInfo()
+function r = ternary(cond, a, b)
+    if cond, r = a; else, r = b; end
 end
