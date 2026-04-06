@@ -177,6 +177,12 @@ classdef RayleighTDLChannel < SimpleChannel
                 obj.h_current = obj.genRayleighCoeffs();
             end
 
+            if strcmp(obj.fadingGranularity, 'PerPacket') || obj.rho >= 1.0
+                % При rho=1 (v=0) PerSymbol вырождается в канал полностью в глубоком замирании.
+                % Регенерируем h независимо для каждого пакета, как в PerPacket.
+                obj.h_current = obj.genRayleighCoeffs();
+            end
+
             % Применение TDL (замирания + многолучевость)
             x_mp = obj.applyTDL(x);
 

@@ -9,6 +9,7 @@ classdef LoRaModem < handle
         crc_init
         preamble_len_init
         rx_ignore_crc
+        ref_chirp_
     end
 
     methods
@@ -137,6 +138,160 @@ classdef LoRaModem < handle
                 rx_ok   = false;
                 crc_ok  = false;
             end
+        end
+        function [h_est, var_est, h_per_sym] = estimateChannel(obj, rxSig, snr_dB, s_ref)
+        % estimateChannel  ML/MMSE-оценка коэффициента плоского замирающего канала
+        %                  по пилотным символам преамбулы LoRa (Шаг 1 алгоритма
+        %                  компенсации канальных искажений).
+        %
+        % ---------------------------------------------------------------
+        % ФИЗИЧЕСКОЕ ОБОСНОВАНИЕ (Акимов/Бакут, гл. 1.2):
+        %
+        %   Модель наблюдения (observation model) для k-го символа преамбулы:
+        %       r_k[n] = h · s_k[n] + w_k[n],   n = 0..Ns-1,  k = 1..N_p
+        %
+        %   где:
+        %       h    — комплексный коэффициент плоского замирающего канала,
+        %              h ~ CN(0, 1)  (замирания Релея)
+        %       s_k  — известный k-й up-chirp преамбулы (пилотный символ)
+        %       w_k  — АБГШ, w_k ~ CN(0, sigma_n^2 · I)
+        %       Ns   — число отсчётов на символ: Ns = 2^SF · (fs/BW)
+        %
+        %   ML-оценка (maximum likelihood estimation) по одному символу:
+        %       h_hat_k = <r_k, s_ref> / <s_ref, s_ref> = (r_k' · s_ref) / Ns
+        %
+        %   MMSE-усреднение по N_p символам преамбулы (оптимальное накопление):
+        %       h_est = (1/N_p) · Σ_{k=1}^{N_p} h_hat_k
+        %
+        %   Теоретическая дисперсия (нижняя граница Крамера–Рао, CRLB):
+        %       Var(h_est) = sigma_n^2 / (N_p · Ns)
+        %                 = 1 / (N_p · Ns · SNR_lin)
+        %
+        %   Выигрыш накопления по N_p = 8 символам: -10·log10(8) ≈ -9 дБ к Var.
+        %
+        %   Примечание о нормировке SNR:
+        %       SNR_lin задан как отношение мощности сигнала к мощности шума
+        %       на один комплексный отсчёт (per-sample SNR convention).
+        %       Эта нормировка соответствует SimpleChannel.addAwgn().
+        % ---------------------------------------------------------------
+        %
+        % ВХОДНЫЕ АРГУМЕНТЫ:
+        %   rxSig  [Mx1 complex] — принятый baseband-сигнал (column vector)
+        %   snr_dB [scalar]      — ОСШ (SNR) в дБ (per-sample convention)
+        %
+        % ВЫХОДНЫЕ АРГУМЕНТЫ:
+        %   h_est     [complex]  — MMSE-оценка коэффициента канала
+        %   var_est   [double]   — теоретическая дисперсия: 1/(N_p·Ns·SNR_lin)
+        %                          (используется как P_0 — начальная ковариация
+        %                           для фильтра Калмана на Шаге 2)
+        %   h_per_sym [N_p x 1]  — ML-оценки по отдельным символам преамбулы
+        %                          (для анализа качества оценки и отладки)
+        %
+        % ПРИМЕР ИСПОЛЬЗОВАНИЯ (из сценария):
+        %   [txSig, ~, ~]      = modem.modulate(bits_tx);
+        %   rxSig              = channel.pass(txSig);
+        %   [h_est, var_est]   = modem.estimateChannel(rxSig, snr_dB);
+        %   % Инициализация фильтра Калмана (Шаг 2):
+        %   h_kalman = h_est;   P_kalman = var_est;
+        %
+        % ЗАВИСИМОСТИ: нет внешних тулбоксов (только стандартные функции MATLAB)
+        % ---------------------------------------------------------------
+        
+            %% --- Параметры дискретизации сигнала
+            os = obj.phy.fs / obj.phy.bw;    % oversampling factor (коэффициент передискретизации)
+            N  = 2^obj.phy.sf;           % chips per symbol (число чирп-отсчётов на символ)
+            Ns = N * os;             % samples per symbol (сигнальных отсчётов на символ)
+        
+            %% --- Генерация референсного up-chirp (эталонного пилотного символа)
+            %
+            % Стандартный CSS up-chirp с линейным ЛЧМ от -BW/2 до +BW/2:
+            %   f_inst[n] = -BW/2 + BW · n/Ns,   n = 0..Ns-1
+            %   phi[n]    = (2π/fs) · Σ_{k=0}^{n} f_inst[k]
+            %             = π · n · (n/Ns - 1/os)
+            %
+            if nargin < 4 || isempty(s_ref)
+                s_ref = obj.getRefChirp();   % fallback: из своего экземпляра phy
+            end
+            s_energy = real(s_ref' * s_ref);
+        
+            %% --- Определение числа используемых символов преамбулы
+            N_p     = obj.preamble_len_init;                       % длина преамбулы (по умолчанию 8)
+            N_avail = floor(length(rxSig) / Ns);            % доступных символов в rxSig
+            N_use   = min(N_p, N_avail);
+        
+            % Граничный случай: сигнал слишком короткий
+            if N_use < 1
+                warning('LoRaModem:estimateChannel:tooShort', ...
+                    ['estimateChannel: rxSig слишком короткий. ' ...
+                     'Ожидалось не менее %d отсчётов (1 символ), получено %d.'], ...
+                    Ns, length(rxSig));
+                h_est     = 1 + 0j;        % нейтральная оценка
+                var_est   = Inf;           % бесконечная дисперсия — оценка ненадёжна
+                h_per_sym = h_est;
+                return;
+            end
+        
+            if N_use < N_p
+                warning('LoRaModem:estimateChannel:partialPreamble', ...
+                    ['estimateChannel: используется %d из %d символов преамбулы ' ...
+                     '(rxSig коротковат для полной преамбулы).'], N_use, N_p);
+            end
+        
+            %% --- ML-оценка по каждому символу преамбулы
+            h_per_sym = complex(zeros(N_use, 1));
+        
+            for k = 1 : N_use
+                % Вырезаем k-й символ из принятого сигнала
+                idx       = (k-1)*Ns + 1 : k*Ns;
+                r_k       = rxSig(idx);                     % принятый k-й символ
+        
+                % Корреляция с референсным chirp: <r_k, s_ref> / <s_ref, s_ref>
+                h_per_sym(k) = (s_ref' * r_k) / s_energy;
+            end
+        
+            %% --- MMSE-усреднение по всем использованным символам
+            %
+            % При независимом аддитивном шуме w_k оценки h_hat_k некоррелированы,
+            % поэтому усреднение является оптимальным (minimum variance estimator):
+            %   h_est = (1/N_use) · Σ h_hat_k
+            h_est = mean(h_per_sym);
+        
+            %% --- Теоретическая дисперсия оценки (CRLB)
+            %
+            % sigma_n^2 = 1/SNR_lin  (per-sample noise power)
+            % Var(h_est) = sigma_n^2 / (N_use · Ns) = 1 / (N_use · Ns · SNR_lin)
+            snr_lin = 10^(snr_dB / 10);
+            var_est = 1 / (N_use * Ns * snr_lin);
+        
+        end
+        function s_ref = getRefChirp(obj)
+        % getRefChirp  Возвращает эталонный up-chirp символ, извлечённый из
+        %              реального TX-сигнала LoRaPHY (не аналитическую аппроксимацию).
+        %
+        % При первом вызове генерирует минимальный LoRa-пакет, извлекает первый
+        % символ преамбулы и сохраняет в кэше (obj.ref_chirp_).
+        % При повторных вызовах возвращает кэшированное значение — без лишних
+        % вызовов phy.encode() / phy.modulate() в цикле Монте-Карло.
+        
+            if isempty(obj.ref_chirp_)
+                os = obj.phy.fs / obj.phy.bw;
+                Ns = 2^obj.phy.sf * os;    % samples per symbol
+        
+                % Сохраняем payloadLenBits — modulate() его перезапишет
+                saved_len = obj.payloadLenBits;
+        
+                % Генерируем минимальный пакет (8 байт = 64 бита)
+                % Содержимое payload не важно — нужен только первый символ преамбулы
+                [txRef, ~, ~] = obj.modulate(false(64, 1));
+        
+                % Восстанавливаем состояние
+                obj.payloadLenBits = saved_len;
+        
+                % Первый символ преамбулы — это и есть эталонный up-chirp
+                obj.ref_chirp_ = txRef(1 : Ns);
+            end
+        
+            s_ref = obj.ref_chirp_;
         end
     end
 
