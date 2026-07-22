@@ -10,6 +10,7 @@ classdef LoRaModem < handle
         preamble_len_init
         rx_ignore_crc
         ref_chirp_
+        cfg
     end
 
     methods
@@ -30,6 +31,7 @@ classdef LoRaModem < handle
             obj.rx_ignore_crc     = logical(p.Results.RxIgnoreCRC);
 
             obj.phy = LoRaPHY(rf_freq, sf, bw, fs);
+            obj.cfg = makeLoRaConfig(rf_freq, sf, bw, fs);
             obj.phy.cr           = obj.cr_init;
             obj.phy.has_header   = obj.has_header_init;
             obj.phy.crc          = obj.crc_init;
@@ -198,10 +200,10 @@ classdef LoRaModem < handle
         % ---------------------------------------------------------------
         
             %% --- Параметры дискретизации сигнала
-            os = obj.phy.fs / obj.phy.bw;    % oversampling factor (коэффициент передискретизации)
-            N  = 2^obj.phy.sf;           % chips per symbol (число чирп-отсчётов на символ)
-            Ns = N * os;             % samples per symbol (сигнальных отсчётов на символ)
-        
+            os = obj.cfg.os;    % oversampling factor (из LoRaConfig)
+            N  = obj.cfg.N;     % chips per symbol   (из LoRaConfig)
+            Ns = obj.cfg.Ns;    % samples per symbol (из LoRaConfig)
+
             %% --- Генерация референсного up-chirp (эталонного пилотного символа)
             %
             % Стандартный CSS up-chirp с линейным ЛЧМ от -BW/2 до +BW/2:
@@ -274,9 +276,8 @@ classdef LoRaModem < handle
         % вызовов phy.encode() / phy.modulate() в цикле Монте-Карло.
         
             if isempty(obj.ref_chirp_)
-                os = obj.phy.fs / obj.phy.bw;
-                Ns = 2^obj.phy.sf * os;    % samples per symbol
-        
+                Ns = obj.cfg.Ns;    % samples per symbol (из LoRaConfig)
+
                 % Сохраняем payloadLenBits — modulate() его перезапишет
                 saved_len = obj.payloadLenBits;
         
