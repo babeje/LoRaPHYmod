@@ -42,6 +42,7 @@
 clearvars; close all;
 addpath(genpath(fullfile(fileparts(mfilename('fullpath')), '..')));
 
+rng(12345,'twister')
 %% ============================================================
 %  Блок 1 — Параметры PHY и симуляции
 %% ============================================================
@@ -53,6 +54,10 @@ bw          = 125e3;      % полоса (bandwidth), Гц
 fs          = 1e6;        % частота дискретизации (sampling rate), Гц
 CR          = 1;          % code rate: CR=1 → 4/5
 payloadBits = 128;        % биты полезной нагрузки (payload), бит
+cfg = makeLoRaConfig(rf_freq, sf, bw, fs);
+os  = cfg.os;
+N   = cfg.N;
+Ns  = cfg.Ns;
 
 % Параметры Монте-Карло
 snr_list_dB = -12 : 1 : 10;   % диапазон ОСШ (SNR sweep), дБ
@@ -93,9 +98,7 @@ modem_gen = LoRaModem(rf_freq, sf, bw, fs, ...
 
 bits_tx = logical(randi([0 1], payloadBits, 1));
 [txSig, ~, ~] = modem_gen.modulate(bits_tx);
-os_val = fs / bw;
-Ns_val = 2^sf * os_val;
-s_ref_ext = txSig(1 : Ns_val);
+s_ref_ext = txSig(1 : cfg.Ns);
 
 txSig_len = length(txSig);
 fprintf('TX-сигнал: %d отсчётов (%.1f мс при fs=%.0f МГц)\n\n', ...
